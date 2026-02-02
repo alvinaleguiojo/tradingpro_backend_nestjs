@@ -2,21 +2,28 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from '../src/app.module';
 import { ExpressAdapter } from '@nestjs/platform-express';
+import { Express, Request, Response } from 'express';
 const express = require('express');
 
-const server = express();
+const server: Express = express();
 
-let app: any;
+let cachedApp: any = null;
 
-async function bootstrap() {
-  if (!app) {
-    const nestApp = await NestFactory.create(
+async function bootstrap(): Promise<any> {
+  if (!cachedApp) {
+    const app = await NestFactory.create(
       AppModule,
       new ExpressAdapter(server),
+      { logger: ['error', 'warn'] },
     );
 
-    nestApp.enableCors();
-    nestApp.useGlobalPipes(
+    app.enableCors({
+      origin: '*',
+      methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+      credentials: true,
+    });
+    
+    app.useGlobalPipes(
       new ValidationPipe({
         whitelist: true,
         transform: true,
@@ -24,12 +31,16 @@ async function bootstrap() {
       }),
     );
 
-    await nestApp.init();
-    app = nestApp;
+    await app.init();
+    cachedApp = app;
   }
-  return app;
+  return cachedApp;
 }
 
-bootstrap();
+// Ensure NestJS is bootstrapped before handling requests
+const bootstrapPromise = bootstrap();
 
-export default server;
+export default async (req: Request, res: Response) => {
+  await bootstrapPromise;
+  server(req, res);
+};
