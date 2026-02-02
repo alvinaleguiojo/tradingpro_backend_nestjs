@@ -35,6 +35,13 @@ import { HealthController } from './health.controller';
         ssl: configService.get('DATABASE_HOST', '').includes('supabase') 
           ? { rejectUnauthorized: false } 
           : false,
+        // Serverless connection pooling settings
+        extra: {
+          max: 2, // Maximum connections per serverless instance
+          min: 0,
+          idleTimeoutMillis: 10000,
+          connectionTimeoutMillis: 10000,
+        },
       }),
     }),
 
