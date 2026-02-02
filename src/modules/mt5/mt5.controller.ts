@@ -125,7 +125,7 @@ export class Mt5Controller {
       port?: string;
     },
   ) {
-    this.mt5Service.setCredentials(
+    await this.mt5Service.setCredentials(
       body.user,
       body.password,
       body.host,

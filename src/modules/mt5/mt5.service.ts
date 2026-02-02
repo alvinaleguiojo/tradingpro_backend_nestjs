@@ -87,16 +87,76 @@ export class Mt5Service implements OnModuleInit {
   }
 
   async onModuleInit() {
-    // Don't auto-connect on startup - wait for frontend to set credentials
-    this.logger.log('MT5 Service initialized - waiting for credentials from frontend login');
+    // Load credentials from database on startup
+    await this.loadCredentialsFromDb();
+    this.logger.log('MT5 Service initialized');
+  }
+
+  /**
+   * Load credentials from database (for serverless persistence)
+   */
+  private async loadCredentialsFromDb(): Promise<void> {
+    try {
+      const connection = await this.mt5ConnectionRepo.findOne({
+        where: {},
+        order: { updatedAt: 'DESC' },
+      });
+      
+      if (connection && connection.user && connection.password && connection.host) {
+        this.dynamicCredentials = {
+          user: connection.user,
+          password: connection.password,
+          host: connection.host,
+          port: connection.port?.toString() || '443',
+        };
+        this.logger.log(`Loaded MT5 credentials for account ${connection.user} from database`);
+      }
+    } catch (error) {
+      this.logger.warn('Could not load credentials from database:', error.message);
+    }
+  }
+
+  /**
+   * Save credentials to database (for serverless persistence)
+   */
+  private async saveCredentialsToDb(user: string, password: string, host: string, port: string): Promise<void> {
+    try {
+      let connection = await this.mt5ConnectionRepo.findOne({
+        where: { user },
+      });
+      
+      if (connection) {
+        connection.password = password;
+        connection.host = host;
+        connection.port = parseInt(port, 10);
+        connection.updatedAt = new Date();
+      } else {
+        connection = this.mt5ConnectionRepo.create({
+          accountId: user,
+          user,
+          password,
+          host,
+          port: parseInt(port, 10),
+        });
+      }
+      
+      await this.mt5ConnectionRepo.save(connection);
+      this.logger.log(`Saved MT5 credentials to database for account ${user}`);
+    } catch (error) {
+      this.logger.warn('Could not save credentials to database:', error.message);
+    }
   }
 
   /**
    * Set credentials from frontend login
    */
-  setCredentials(user: string, password: string, host: string, port: string = '443'): void {
+  async setCredentials(user: string, password: string, host: string, port: string = '443'): Promise<void> {
     this.dynamicCredentials = { user, password, host, port };
     this.token = null; // Reset token to force reconnection
+    
+    // Persist to database for serverless
+    await this.saveCredentialsToDb(user, password, host, port);
+    
     this.logger.log(`MT5 credentials set for account ${user}`);
   }
 

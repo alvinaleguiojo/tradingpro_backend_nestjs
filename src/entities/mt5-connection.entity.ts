@@ -20,6 +20,9 @@ export class Mt5Connection {
   @Column()
   user: string;
 
+  @Column({ type: 'text', nullable: true })
+  password: string | null;
+
   @Column()
   host: string;
 
