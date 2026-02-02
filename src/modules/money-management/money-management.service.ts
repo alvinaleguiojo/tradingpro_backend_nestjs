@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { MoneyManagementLevel } from '../../entities/money-management-level.entity';
 import { TradingAccountState } from '../../entities/trading-account-state.entity';
 import { Mt5Service } from '../mt5/mt5.service';
+import { withRetry } from '../../utils/database.utils';
 
 export interface MoneyLevel {
   level: number;
@@ -63,12 +64,18 @@ export class MoneyManagementService implements OnModuleInit {
    */
   private async initializeLevels(): Promise<void> {
     try {
-      const existingLevels = await this.levelRepo.find();
+      const existingLevels = await withRetry(
+        () => this.levelRepo.find(),
+        { operationName: 'Load money management levels', maxRetries: 3 }
+      );
       
       if (existingLevels.length === 0) {
         // Seed default levels
         for (const level of DEFAULT_LEVELS) {
-          await this.levelRepo.save(this.levelRepo.create(level));
+          await withRetry(
+            () => this.levelRepo.save(this.levelRepo.create(level)),
+            { operationName: 'Save money management level', maxRetries: 3 }
+          );
         }
         this.logger.log('Money management levels initialized');
       } else {
@@ -171,7 +178,10 @@ export class MoneyManagementService implements OnModuleInit {
    * Get or create account state
    */
   async getOrCreateAccountState(accountId: string): Promise<TradingAccountState> {
-    let state = await this.accountStateRepo.findOne({ where: { accountId } });
+    let state = await withRetry(
+      () => this.accountStateRepo.findOne({ where: { accountId } }),
+      { operationName: 'Find account state', maxRetries: 3 }
+    );
     
     if (!state) {
       // Get balance from MT5
@@ -194,7 +204,10 @@ export class MoneyManagementService implements OnModuleInit {
         monthStartDate: this.getMonthStartDate(),
       });
       
-      await this.accountStateRepo.save(state);
+      await withRetry(
+        () => this.accountStateRepo.save(state),
+        { operationName: 'Save account state', maxRetries: 3 }
+      );
       this.logger.log(`Created account state for ${accountId} at level ${level.level}`);
     }
     
@@ -250,7 +263,10 @@ export class MoneyManagementService implements OnModuleInit {
     state.weeklyTargetReached = state.weeklyProfit >= newLevel.weeklyTarget;
     state.monthlyTargetReached = state.monthlyProfit >= newLevel.monthlyTarget;
     
-    await this.accountStateRepo.save(state);
+    await withRetry(
+      () => this.accountStateRepo.save(state),
+      { operationName: 'Update account state', maxRetries: 3 }
+    );
     
     this.logger.log(
       `Account ${accountId} updated: Balance=$${newBalance}, Level=${newLevel.level}, ` +

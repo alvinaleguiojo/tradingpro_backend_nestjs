@@ -18,35 +18,66 @@ import { HealthController } from './health.controller';
       envFilePath: '.env',
     }),
 
-    // Database
+    // Database - Optimized for Vercel Serverless + Supabase
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        type: 'postgres',
-        host: configService.get('DATABASE_HOST', 'localhost'),
-        port: configService.get('DATABASE_PORT', 5432),
-        username: configService.get('DATABASE_USERNAME', 'postgres'),
-        password: configService.get('DATABASE_PASSWORD', 'postgres'),
-        database: configService.get('DATABASE_NAME', 'tradingpro'),
-        entities: [__dirname + '/**/*.entity{.ts,.js}'],
-        synchronize: configService.get('NODE_ENV') !== 'production', // Disabled in production to avoid timeouts
-        logging: false,
-        ssl: configService.get('DATABASE_HOST', '').includes('supabase') 
-          ? { rejectUnauthorized: false } 
-          : false,
-        // Serverless connection pooling settings - optimized for Supabase free tier
-        extra: {
-          max: 1, // Only 1 connection per serverless instance to avoid MaxClientsInSessionMode
-          min: 0,
-          idleTimeoutMillis: 1000, // Close idle connections very fast
-          connectionTimeoutMillis: 10000, // 10 second connection timeout
-          statement_timeout: 30000, // 30 second query timeout
-          keepAlive: false, // Don't keep connections alive in serverless
-        },
-        retryAttempts: 2, // Fewer retries to fail faster
-        retryDelay: 500, // 0.5 second between retries
-      }),
+      useFactory: (configService: ConfigService) => {
+        const isProduction = configService.get('NODE_ENV') === 'production';
+        const dbHost = configService.get('DATABASE_HOST', 'localhost');
+        const isSupabase = dbHost.includes('supabase') || dbHost.includes('pooler');
+        
+        return {
+          type: 'postgres',
+          host: dbHost,
+          port: configService.get('DATABASE_PORT', 5432),
+          username: configService.get('DATABASE_USERNAME', 'postgres'),
+          password: configService.get('DATABASE_PASSWORD', 'postgres'),
+          database: configService.get('DATABASE_NAME', 'tradingpro'),
+          entities: [__dirname + '/**/*.entity{.ts,.js}'],
+          synchronize: !isProduction, // Disabled in production
+          logging: false,
+          ssl: isSupabase ? { rejectUnauthorized: false } : false,
+          
+          // Connection pool settings optimized for serverless
+          extra: {
+            // Connection pool size
+            max: 3, // Small pool for serverless, but allow some concurrency
+            min: 0, // No minimum, connections will be created on demand
+            
+            // Connection lifecycle
+            idleTimeoutMillis: 10000, // Close idle connections after 10s
+            connectionTimeoutMillis: 15000, // 15 second connection timeout
+            
+            // Query timeouts
+            statement_timeout: 30000, // 30 second query timeout
+            query_timeout: 30000, // 30 second query timeout
+            
+            // Keep-alive settings for connection stability
+            keepAlive: true,
+            keepAliveInitialDelayMillis: 5000,
+            
+            // Connection validation
+            allowExitOnIdle: true, // Allow process to exit even with idle connections
+          },
+          
+          // TypeORM retry settings
+          retryAttempts: 5, // More retries for transient failures
+          retryDelay: 1000, // 1 second between retries
+          
+          // Auto-reconnect on connection loss
+          autoLoadEntities: false, // Already using entities array
+          
+          // Connection pooling behavior
+          poolSize: 3,
+          connectTimeoutMS: 15000,
+          
+          // Cache settings to reduce DB calls
+          cache: {
+            duration: 5000, // Cache queries for 5 seconds
+          },
+        };
+      },
     }),
 
     // Scheduling for cron jobs

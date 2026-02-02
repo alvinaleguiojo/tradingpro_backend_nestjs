@@ -11,6 +11,7 @@ import { OpenAiService, AiTradeRecommendation } from '../openai/openai.service';
 import { MoneyManagementService } from '../money-management/money-management.service';
 import { KillZoneService } from '../ict-strategy/services/kill-zone.service';
 import { IctAnalysisResult, TradeSetup, Candle } from '../ict-strategy/types';
+import { withRetry } from '../../utils/database.utils';
 
 @Injectable()
 export class TradingService implements OnModuleInit {
@@ -70,7 +71,11 @@ export class TradingService implements OnModuleInit {
       tradeId,
       signalId,
     });
-    await this.logRepo.save(log);
+    
+    await withRetry(
+      () => this.logRepo.save(log),
+      { operationName: 'Save trading log', maxRetries: 3 }
+    );
     
     if (level === 'error') {
       this.logger.error(message, data);
@@ -279,7 +284,10 @@ export class TradingService implements OnModuleInit {
       executed: false,
     });
 
-    return await this.signalRepo.save(signal);
+    return await withRetry(
+      () => this.signalRepo.save(signal),
+      { operationName: 'Save trading signal', maxRetries: 3 }
+    );
   }
 
   /**
@@ -399,12 +407,18 @@ export class TradingService implements OnModuleInit {
         },
       });
 
-      const savedTrade = await this.tradeRepo.save(trade);
+      const savedTrade = await withRetry(
+        () => this.tradeRepo.save(trade),
+        { operationName: 'Save trade', maxRetries: 3 }
+      );
 
       // Update signal as executed
       signal.executed = true;
       signal.tradeId = savedTrade.id;
-      await this.signalRepo.save(signal);
+      await withRetry(
+        () => this.signalRepo.save(signal),
+        { operationName: 'Update signal executed status', maxRetries: 3 }
+      );
 
       await this.logEvent(
         TradingEventType.TRADE_OPENED,
@@ -514,7 +528,10 @@ export class TradingService implements OnModuleInit {
         // The profit should be the difference or stored in trade metadata
         const profit = trade.profit || 0;
         
-        await this.tradeRepo.save(trade);
+        await withRetry(
+          () => this.tradeRepo.save(trade),
+          { operationName: 'Update closed trade', maxRetries: 3 }
+        );
 
         // Update money management account state with the profit
         if (profit !== 0 && currentBalance > 0) {
@@ -536,7 +553,10 @@ export class TradingService implements OnModuleInit {
       } else {
         // Update profit
         trade.profit = mt5Order.profit;
-        await this.tradeRepo.save(trade);
+        await withRetry(
+          () => this.tradeRepo.save(trade),
+          { operationName: 'Update trade profit', maxRetries: 3 }
+        );
       }
     }
   }
