@@ -88,7 +88,7 @@ export class AutoTradingService implements OnModuleInit {
       this.logger.log(`📊 Signal: ${signal.signalType} | Confidence: ${signal.confidence}% | Strength: ${signal.strength}`);
 
       // Step 2: Execute trade if signal is actionable
-      if (signal.signalType !== 'HOLD' && signal.confidence >= 50) {
+      if (signal.signalType !== 'HOLD' && signal.confidence >= 30) {
         const trade = await this.tradingService.executeTrade(signal);
         
         if (trade) {

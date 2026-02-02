@@ -148,7 +148,13 @@ export class IctStrategyService {
     const inKillZone = currentKillZone !== null;
     if (inKillZone) {
       confluences.push(`In ${currentKillZone.name}`);
-      confidence += 15;
+      confidence += 20;
+    }
+
+    // Bonus for clear trending market
+    if (marketStructure.trend !== 'RANGING') {
+      confluences.push(`Clear ${marketStructure.trend} trend`);
+      confidence += 10;
     }
 
     // Check if it's a high probability trading day
@@ -290,15 +296,15 @@ export class IctStrategyService {
     const riskRewardRatio = reward / risk;
 
     // Minimum requirements for trade
-    if (confidence < 40) {
+    if (confidence < 30) {
       return null; // Not enough confidence
     }
 
-    if (riskRewardRatio < 1.5) {
+    if (riskRewardRatio < 1.2) {
       return null; // RR too low
     }
 
-    if (reasons.length < 2) {
+    if (reasons.length < 1) {
       return null; // Not enough reasons
     }
 

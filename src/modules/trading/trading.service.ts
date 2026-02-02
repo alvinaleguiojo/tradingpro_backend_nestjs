@@ -236,7 +236,7 @@ export class TradingService {
         return null;
       }
 
-      if (signal.confidence < 50) {
+      if (signal.confidence < 30) {
         this.logger.log(`Signal confidence too low: ${signal.confidence}%`);
         return null;
       }
