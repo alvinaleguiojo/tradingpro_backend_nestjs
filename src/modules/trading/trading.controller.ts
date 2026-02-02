@@ -2,6 +2,7 @@ import { Controller, Get, Post, Query, Body, Param, Headers } from '@nestjs/comm
 import { ApiTags, ApiOperation, ApiQuery, ApiBody } from '@nestjs/swagger';
 import { TradingService } from './trading.service';
 import { AutoTradingService } from './auto-trading.service';
+import { KillZoneService } from '../ict-strategy/services/kill-zone.service';
 
 @ApiTags('trading')
 @Controller('trading')
@@ -9,6 +10,7 @@ export class TradingController {
   constructor(
     private readonly tradingService: TradingService,
     private readonly autoTradingService: AutoTradingService,
+    private readonly killZoneService: KillZoneService,
   ) {}
 
   @Get('status')
@@ -122,5 +124,21 @@ export class TradingController {
   @ApiOperation({ summary: 'Toggle auto trading on/off' })
   toggleAutoTrading() {
     return this.autoTradingService.toggle();
+  }
+
+  @Get('timezone')
+  @ApiOperation({ summary: 'Get broker timezone info and current kill zone' })
+  getTimezoneInfo() {
+    const timezoneInfo = this.killZoneService.getTimezoneInfo();
+    const currentKillZone = this.killZoneService.getCurrentKillZone();
+    
+    return {
+      success: true,
+      data: {
+        ...timezoneInfo,
+        currentKillZone: currentKillZone?.name || 'Outside Kill Zone',
+        isInKillZone: !!currentKillZone,
+      },
+    };
   }
 }

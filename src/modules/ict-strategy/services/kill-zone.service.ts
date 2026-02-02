@@ -1,46 +1,77 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { KillZone } from '../types';
 
 @Injectable()
 export class KillZoneService {
-  // ICT Kill Zones (in UTC)
+  // Broker timezone offset from UTC (e.g., +2 for UTC+2, +8 for Singapore)
+  // Most MT5 brokers use UTC+2 or UTC+3 (during DST)
+  private readonly brokerTimezoneOffset: number;
+
+  constructor(private configService: ConfigService) {
+    // Default to UTC+2 (common for most forex brokers)
+    // Can be configured via environment variable
+    this.brokerTimezoneOffset = parseInt(
+      this.configService.get('MT5_BROKER_TIMEZONE_OFFSET', '2'),
+      10,
+    );
+  }
+
+  // ICT Kill Zones (in BROKER SERVER TIME)
+  // These times are based on broker server timezone
   private readonly killZones: KillZone[] = [
     {
       name: 'Asian Session',
       active: false,
       bias: 'NEUTRAL',
-      startHour: 0,  // 00:00 UTC
-      endHour: 8,    // 08:00 UTC
+      startHour: 2,   // 00:00 UTC = 02:00 Broker (UTC+2)
+      endHour: 10,    // 08:00 UTC = 10:00 Broker (UTC+2)
     },
     {
       name: 'London Open Kill Zone',
       active: false,
       bias: 'NEUTRAL',
-      startHour: 7,  // 07:00 UTC (02:00-05:00 EST)
-      endHour: 10,   // 10:00 UTC
+      startHour: 9,   // 07:00 UTC = 09:00 Broker (UTC+2)
+      endHour: 12,    // 10:00 UTC = 12:00 Broker (UTC+2)
     },
     {
       name: 'New York Open Kill Zone',
       active: false,
       bias: 'NEUTRAL',
-      startHour: 12, // 12:00 UTC (07:00-10:00 EST)
-      endHour: 15,   // 15:00 UTC
+      startHour: 14,  // 12:00 UTC = 14:00 Broker (UTC+2)
+      endHour: 17,    // 15:00 UTC = 17:00 Broker (UTC+2)
     },
     {
       name: 'London Close Kill Zone',
       active: false,
       bias: 'NEUTRAL',
-      startHour: 15, // 15:00 UTC (10:00-12:00 EST)
-      endHour: 17,   // 17:00 UTC
+      startHour: 17,  // 15:00 UTC = 17:00 Broker (UTC+2)
+      endHour: 19,    // 17:00 UTC = 19:00 Broker (UTC+2)
     },
   ];
 
   /**
-   * Get the current kill zone based on UTC time
+   * Get the current broker server time
+   * Converts UTC to broker timezone
+   */
+  getBrokerTime(): Date {
+    const now = new Date();
+    const utcTime = now.getTime() + now.getTimezoneOffset() * 60000;
+    return new Date(utcTime + this.brokerTimezoneOffset * 3600000);
+  }
+
+  /**
+   * Get the current broker hour (0-23)
+   */
+  getBrokerHour(): number {
+    return this.getBrokerTime().getHours();
+  }
+
+  /**
+   * Get the current kill zone based on broker server time
    */
   getCurrentKillZone(): KillZone | null {
-    const now = new Date();
-    const currentHour = now.getUTCHours();
+    const currentHour = this.getBrokerHour();
     
     for (const zone of this.killZones) {
       if (currentHour >= zone.startHour && currentHour < zone.endHour) {
@@ -52,6 +83,24 @@ export class KillZoneService {
     }
     
     return null;
+  }
+
+  /**
+   * Get timezone info for debugging/display
+   */
+  getTimezoneInfo(): {
+    brokerOffset: number;
+    brokerTime: string;
+    brokerHour: number;
+    utcTime: string;
+  } {
+    const brokerTime = this.getBrokerTime();
+    return {
+      brokerOffset: this.brokerTimezoneOffset,
+      brokerTime: brokerTime.toISOString(),
+      brokerHour: brokerTime.getHours(),
+      utcTime: new Date().toISOString(),
+    };
   }
 
   /**

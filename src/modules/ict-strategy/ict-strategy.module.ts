@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { IctStrategyService } from './ict-strategy.service';
 import { MarketStructureService } from './services/market-structure.service';
@@ -10,7 +11,10 @@ import { TradingSignal } from '../../entities/trading-signal.entity';
 import { MarketData } from '../../entities/market-data.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([TradingSignal, MarketData])],
+  imports: [
+    ConfigModule,
+    TypeOrmModule.forFeature([TradingSignal, MarketData]),
+  ],
   providers: [
     IctStrategyService,
     MarketStructureService,
@@ -19,6 +23,6 @@ import { MarketData } from '../../entities/market-data.entity';
     LiquidityService,
     KillZoneService,
   ],
-  exports: [IctStrategyService],
+  exports: [IctStrategyService, KillZoneService],
 })
 export class IctStrategyModule {}
