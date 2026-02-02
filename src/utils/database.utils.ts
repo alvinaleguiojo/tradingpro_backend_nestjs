@@ -84,6 +84,10 @@ export function isRetryableError(error: any): boolean {
     'idle_in_transaction_session_timeout',
     'statement_timeout',
     'lock_timeout',
+    'maxclientsinsessionmode', // Supabase PgBouncer Session Mode limit
+    'max clients reached',
+    'pool_size',
+    'session mode',
   ];
 
   // Check message patterns

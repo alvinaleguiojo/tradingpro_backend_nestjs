@@ -18,7 +18,7 @@ import { HealthController } from './health.controller';
       envFilePath: '.env',
     }),
 
-    // Database - Optimized for Vercel Serverless + Supabase
+    // Database - Optimized for Vercel Serverless + Supabase Session Mode
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -39,42 +39,56 @@ import { HealthController } from './health.controller';
           logging: false,
           ssl: isSupabase ? { rejectUnauthorized: false } : false,
           
-          // Connection pool settings optimized for serverless
+          // CRITICAL: Ultra-minimal pool for Supabase Session Mode
+          // Session mode has VERY limited connections (~10-20 on free tier)
+          // Each Vercel function instance needs its own connection
           extra: {
-            // Connection pool size
-            max: 3, // Small pool for serverless, but allow some concurrency
-            min: 0, // No minimum, connections will be created on demand
+            // SINGLE connection per serverless function to avoid pool exhaustion
+            max: 1, // Only 1 connection per function instance
+            min: 0, // No minimum, create on demand
             
-            // Connection lifecycle
-            idleTimeoutMillis: 10000, // Close idle connections after 10s
-            connectionTimeoutMillis: 15000, // 15 second connection timeout
+            // Aggressive connection release for serverless
+            idleTimeoutMillis: 1000, // Release idle connections after 1 second
+            connectionTimeoutMillis: 5000, // 5 second connection timeout (fail fast)
             
             // Query timeouts
-            statement_timeout: 30000, // 30 second query timeout
-            query_timeout: 30000, // 30 second query timeout
+            statement_timeout: 25000, // 25 second query timeout
+            query_timeout: 25000, // 25 second query timeout
             
-            // Keep-alive settings for connection stability
-            keepAlive: true,
-            keepAliveInitialDelayMillis: 5000,
+            // Allow immediate connection release
+            allowExitOnIdle: true,
             
-            // Connection validation
-            allowExitOnIdle: true, // Allow process to exit even with idle connections
+            // Acquire timeout - how long to wait for a connection
+            acquireTimeoutMillis: 10000, // 10 seconds to acquire connection
+            
+            // Create timeout for new connections
+            createTimeoutMillis: 5000, // 5 seconds to create connection
+            
+            // Destroy timeout for closing connections
+            destroyTimeoutMillis: 3000, // 3 seconds to destroy connection
+            
+            // Retry settings within pg pool
+            createRetryIntervalMillis: 500, // Wait 500ms between connection attempts
+            
+            // Propagate create error to fail fast
+            propagateCreateError: true,
+            
+            // PgBouncer compatibility - REQUIRED for Supabase Session Mode
+            // These prevent prepared statement issues with PgBouncer
+            application_name: 'tradingpro_backend',
           },
           
-          // TypeORM retry settings
-          retryAttempts: 5, // More retries for transient failures
-          retryDelay: 1000, // 1 second between retries
+          // TypeORM retry settings - longer delays to let pool clear
+          retryAttempts: 10, // More retries
+          retryDelay: 2000, // 2 seconds between retries (allows pool to clear)
           
-          // Auto-reconnect on connection loss
-          autoLoadEntities: false, // Already using entities array
+          // Minimal pool size
+          poolSize: 1,
+          connectTimeoutMS: 5000,
           
-          // Connection pooling behavior
-          poolSize: 3,
-          connectTimeoutMS: 15000,
-          
-          // Cache settings to reduce DB calls
+          // Cache to reduce DB calls
           cache: {
-            duration: 5000, // Cache queries for 5 seconds
+            duration: 10000, // Cache queries for 10 seconds
           },
         };
       },
