@@ -10,12 +10,14 @@ import { IctStrategyService } from '../ict-strategy/ict-strategy.service';
 import { OpenAiService, AiTradeRecommendation } from '../openai/openai.service';
 import { MoneyManagementService } from '../money-management/money-management.service';
 import { KillZoneService } from '../ict-strategy/services/kill-zone.service';
+import { ScalpingStrategyService } from '../ict-strategy/services/scalping-strategy.service';
 import { IctAnalysisResult, TradeSetup, Candle } from '../ict-strategy/types';
 import { withRetry } from '../../utils/database.utils';
 
 @Injectable()
 export class TradingService implements OnModuleInit {
   private readonly logger = new Logger(TradingService.name);
+  private scalpingMode: boolean = true; // Enable aggressive scalping by default
 
   constructor(
     private configService: ConfigService,
@@ -30,11 +32,31 @@ export class TradingService implements OnModuleInit {
     private openAiService: OpenAiService,
     private moneyManagementService: MoneyManagementService,
     private killZoneService: KillZoneService,
+    private scalpingStrategy: ScalpingStrategyService,
   ) {}
 
   async onModuleInit() {
+    // Check if scalping mode is enabled
+    this.scalpingMode = this.configService.get('SCALPING_MODE', 'true') === 'true';
+    this.logger.log(`Trading mode: ${this.scalpingMode ? '⚡ AGGRESSIVE SCALPING' : '📊 Standard ICT'}`);
+    
     // Sync broker timezone from MT5 on startup
     await this.syncBrokerTimezone();
+  }
+
+  /**
+   * Toggle scalping mode
+   */
+  setScalpingMode(enabled: boolean): void {
+    this.scalpingMode = enabled;
+    this.logger.log(`Scalping mode: ${enabled ? 'ENABLED' : 'DISABLED'}`);
+  }
+
+  /**
+   * Get scalping mode status
+   */
+  isScalpingMode(): boolean {
+    return this.scalpingMode;
   }
 
   /**
@@ -92,14 +114,17 @@ export class TradingService implements OnModuleInit {
     timeframe: string,
   ): Promise<TradingSignal | null> {
     try {
+      // Use M5 for scalping mode, otherwise use provided timeframe
+      const analysisTimeframe = this.scalpingMode ? 'M5' : timeframe;
+      
       // Get price history from MT5
-      const candles = await this.mt5Service.getPriceHistory(symbol, timeframe, 200);
+      const candles = await this.mt5Service.getPriceHistory(symbol, analysisTimeframe, 200);
       
       if (candles.length < 50) {
         await this.logEvent(
           TradingEventType.MARKET_ANALYSIS,
           'Insufficient candles for analysis',
-          { symbol, timeframe, candleCount: candles.length },
+          { symbol, timeframe: analysisTimeframe, candleCount: candles.length },
           'warn',
         );
         return null;
@@ -115,6 +140,65 @@ export class TradingService implements OnModuleInit {
         volume: c.tickVolume,
       }));
 
+      // Get current price and spread
+      const quote = await this.mt5Service.getQuote(symbol);
+      const currentPrice = quote?.bid || formattedCandles[formattedCandles.length - 1].close;
+      const spread = quote ? (quote.ask - quote.bid) * 10 : 0; // Convert to pips
+
+      // ======= SCALPING MODE =======
+      if (this.scalpingMode) {
+        this.logger.log(`⚡ Running AGGRESSIVE SCALPING analysis for ${symbol} on ${analysisTimeframe}`);
+        
+        // Skip high-impact news for scalping (too risky)
+        if (this.ictStrategyService.isHighImpactNewsTime()) {
+          await this.logEvent(
+            TradingEventType.MARKET_ANALYSIS,
+            'Scalping paused - High-impact news time',
+            { symbol, timeframe: analysisTimeframe },
+            'info',
+          );
+          return null;
+        }
+
+        // Run scalping strategy analysis
+        const scalpSetup = this.scalpingStrategy.analyzeForScalp(
+          formattedCandles,
+          currentPrice,
+          spread,
+        );
+
+        if (!scalpSetup) {
+          this.logger.log('⏸️ No scalping setup found');
+          return null;
+        }
+
+        this.logger.log(
+          `🎯 SCALP SIGNAL: ${scalpSetup.direction} | Confidence: ${scalpSetup.confidence}% | ` +
+          `Entry: ${currentPrice.toFixed(2)} | SL: ${scalpSetup.stopLoss.toFixed(2)} | ` +
+          `TP: ${scalpSetup.takeProfit.toFixed(2)} | R:R ${scalpSetup.riskRewardRatio}`
+        );
+
+        // Create scalping signal (skip AI for speed)
+        const signal = await this.createScalpingSignal(scalpSetup, symbol, analysisTimeframe, currentPrice);
+
+        await this.logEvent(
+          TradingEventType.SIGNAL_GENERATED,
+          `SCALP signal: ${signal.signalType} with ${signal.confidence}% confidence`,
+          { 
+            signalId: signal.id,
+            mode: 'SCALPING',
+            reasons: scalpSetup.reasons,
+            confluences: scalpSetup.confluences,
+          },
+          'info',
+          undefined,
+          signal.id,
+        );
+
+        return signal;
+      }
+
+      // ======= STANDARD ICT MODE =======
       // Check for high-impact news times
       if (this.ictStrategyService.isHighImpactNewsTime()) {
         await this.logEvent(
@@ -291,6 +375,57 @@ export class TradingService implements OnModuleInit {
   }
 
   /**
+   * Create a trading signal from scalping analysis (faster, no AI)
+   */
+  private async createScalpingSignal(
+    scalpSetup: TradeSetup,
+    symbol: string,
+    timeframe: string,
+    currentPrice: number,
+  ): Promise<TradingSignal> {
+    const signalType = scalpSetup.direction === 'BUY' ? SignalType.BUY : SignalType.SELL;
+    
+    // Scalping uses different strength thresholds (lower requirements)
+    let strength: SignalStrength;
+    if (scalpSetup.confidence >= 70) strength = SignalStrength.VERY_STRONG;
+    else if (scalpSetup.confidence >= 50) strength = SignalStrength.STRONG;
+    else if (scalpSetup.confidence >= 30) strength = SignalStrength.MODERATE;
+    else strength = SignalStrength.WEAK;
+
+    const signal = this.signalRepo.create({
+      symbol,
+      timeframe,
+      signalType,
+      strength,
+      entryPrice: currentPrice,
+      stopLoss: scalpSetup.stopLoss,
+      takeProfit: scalpSetup.takeProfit,
+      confidence: scalpSetup.confidence,
+      ictAnalysis: {
+        marketStructure: 'SCALPING',
+        orderBlocks: [],
+        fairValueGaps: [],
+        liquidityLevels: [],
+        killZone: 'Scalping Mode',
+        sessionBias: scalpSetup.direction,
+      },
+      aiAnalysis: JSON.stringify({
+        mode: 'SCALPING',
+        reasons: scalpSetup.reasons,
+        confluences: scalpSetup.confluences,
+        riskReward: scalpSetup.riskRewardRatio,
+      }),
+      reasoning: `SCALP: ${scalpSetup.reasons.join(', ')}. Confluences: ${scalpSetup.confluences.join(', ')}`,
+      executed: false,
+    });
+
+    return await withRetry(
+      () => this.signalRepo.save(signal),
+      { operationName: 'Save scalping signal', maxRetries: 3 }
+    );
+  }
+
+  /**
    * Execute a trade based on a signal
    */
   async executeTrade(signal: TradingSignal): Promise<Trade | null> {
@@ -309,8 +444,10 @@ export class TradingService implements OnModuleInit {
         return null;
       }
 
-      if (signal.confidence < 30) {
-        this.logger.log(`Signal confidence too low: ${signal.confidence}%`);
+      // Lower confidence threshold for scalping mode (20% vs 30%)
+      const minConfidence = this.scalpingMode ? 20 : 30;
+      if (signal.confidence < minConfidence) {
+        this.logger.log(`Signal confidence too low: ${signal.confidence}% (min: ${minConfidence}%)`);
         return null;
       }
 

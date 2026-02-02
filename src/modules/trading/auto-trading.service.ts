@@ -9,6 +9,7 @@ export class AutoTradingService implements OnModuleInit {
   private readonly logger = new Logger(AutoTradingService.name);
   private isRunning = false;
   private isEnabled: boolean;
+  private scalpingMode: boolean;
 
   constructor(
     private configService: ConfigService,
@@ -16,10 +17,12 @@ export class AutoTradingService implements OnModuleInit {
   ) {
     // Initialize from environment variable
     this.isEnabled = this.configService.get('AUTO_TRADING_ENABLED', 'true') === 'true';
+    this.scalpingMode = this.configService.get('SCALPING_MODE', 'true') === 'true';
   }
 
   async onModuleInit() {
-    this.logger.log(`Auto Trading Service initialized. Enabled: ${this.isEnabled}`);
+    const mode = this.scalpingMode ? '⚡ AGGRESSIVE SCALPING (5min cycles)' : '📊 Standard ICT (15min cycles)';
+    this.logger.log(`Auto Trading Service initialized. Enabled: ${this.isEnabled}, Mode: ${mode}`);
     
     // Run initial analysis on startup (after a delay to ensure MT5 connection)
     if (this.isEnabled) {
@@ -28,18 +31,29 @@ export class AutoTradingService implements OnModuleInit {
   }
 
   /**
-   * Main trading cron job - runs every 15 minutes
-   * Aligned with M15 candle close
+   * SCALPING MODE: Runs every 5 minutes for aggressive trading
    */
-  @Cron('0 */15 * * * *') // At minute 0, 15, 30, 45
-  async handleTradingCron() {
-    await this.runTradingCycle();
+  @Cron('0 */5 * * * *') // Every 5 minutes
+  async handleScalpingCron() {
+    if (this.scalpingMode && this.tradingService.isScalpingMode()) {
+      await this.runTradingCycle();
+    }
   }
 
   /**
-   * Sync trades with MT5 every 5 minutes
+   * STANDARD MODE: Runs every 15 minutes aligned with M15 candle close
    */
-  @Cron('0 */5 * * * *')
+  @Cron('0 */15 * * * *') // At minute 0, 15, 30, 45
+  async handleTradingCron() {
+    if (!this.scalpingMode || !this.tradingService.isScalpingMode()) {
+      await this.runTradingCycle();
+    }
+  }
+
+  /**
+   * Sync trades with MT5 every 2 minutes (faster for scalping)
+   */
+  @Cron('0 */2 * * * *')
   async handleSyncCron() {
     try {
       await this.tradingService.syncTradesWithMt5();

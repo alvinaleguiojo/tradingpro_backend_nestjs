@@ -7,6 +7,7 @@ import { OrderBlockService } from './services/order-block.service';
 import { FairValueGapService } from './services/fair-value-gap.service';
 import { LiquidityService } from './services/liquidity.service';
 import { KillZoneService } from './services/kill-zone.service';
+import { ScalpingStrategyService } from './services/scalping-strategy.service';
 import { TradingSignal } from '../../entities/trading-signal.entity';
 import { MarketData } from '../../entities/market-data.entity';
 
@@ -22,7 +23,8 @@ import { MarketData } from '../../entities/market-data.entity';
     FairValueGapService,
     LiquidityService,
     KillZoneService,
+    ScalpingStrategyService,
   ],
-  exports: [IctStrategyService, KillZoneService],
+  exports: [IctStrategyService, KillZoneService, ScalpingStrategyService],
 })
 export class IctStrategyModule {}

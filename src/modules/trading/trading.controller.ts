@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation, ApiQuery, ApiBody } from '@nestjs/swagger';
 import { TradingService } from './trading.service';
 import { AutoTradingService } from './auto-trading.service';
 import { KillZoneService } from '../ict-strategy/services/kill-zone.service';
+import { ScalpingStrategyService } from '../ict-strategy/services/scalping-strategy.service';
 
 @ApiTags('trading')
 @Controller('trading')
@@ -11,6 +12,7 @@ export class TradingController {
     private readonly tradingService: TradingService,
     private readonly autoTradingService: AutoTradingService,
     private readonly killZoneService: KillZoneService,
+    private readonly scalpingStrategy: ScalpingStrategyService,
   ) {}
 
   @Get('status')
@@ -139,6 +141,74 @@ export class TradingController {
         currentKillZone: currentKillZone?.name || 'Outside Kill Zone',
         isInKillZone: !!currentKillZone,
       },
+    };
+  }
+
+  // ========== SCALPING MODE ENDPOINTS ==========
+
+  @Get('scalping/status')
+  @ApiOperation({ summary: 'Get scalping mode status and configuration' })
+  getScalpingStatus() {
+    return {
+      success: true,
+      data: {
+        enabled: this.tradingService.isScalpingMode(),
+        config: this.scalpingStrategy.getConfig(),
+        description: 'Aggressive scalping mode uses M5 timeframe, lower confidence thresholds, and tighter stops',
+      },
+    };
+  }
+
+  @Post('scalping/enable')
+  @ApiOperation({ summary: 'Enable aggressive scalping mode' })
+  enableScalpingMode() {
+    this.tradingService.setScalpingMode(true);
+    return {
+      success: true,
+      message: '⚡ Aggressive scalping mode ENABLED',
+      data: {
+        enabled: true,
+        timeframe: 'M5',
+        cycleInterval: '5 minutes',
+        config: this.scalpingStrategy.getConfig(),
+      },
+    };
+  }
+
+  @Post('scalping/disable')
+  @ApiOperation({ summary: 'Disable scalping mode (use standard ICT strategy)' })
+  disableScalpingMode() {
+    this.tradingService.setScalpingMode(false);
+    return {
+      success: true,
+      message: '📊 Standard ICT mode ENABLED',
+      data: {
+        enabled: false,
+        timeframe: 'M15',
+        cycleInterval: '15 minutes',
+      },
+    };
+  }
+
+  @Post('scalping/config')
+  @ApiOperation({ summary: 'Update scalping configuration' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        minConfidence: { type: 'number', description: 'Minimum confidence to trade (default: 20)' },
+        stopLossPips: { type: 'number', description: 'Stop loss in pips (default: 50)' },
+        takeProfitPips: { type: 'number', description: 'Take profit in pips (default: 80)' },
+        minRiskReward: { type: 'number', description: 'Minimum R:R ratio (default: 1.2)' },
+      },
+    },
+  })
+  updateScalpingConfig(@Body() config: any) {
+    this.scalpingStrategy.setConfig(config);
+    return {
+      success: true,
+      message: 'Scalping configuration updated',
+      data: this.scalpingStrategy.getConfig(),
     };
   }
 }
