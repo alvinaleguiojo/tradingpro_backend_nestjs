@@ -87,9 +87,13 @@ export class Mt5Service implements OnModuleInit {
   }
 
   async onModuleInit() {
-    // Load credentials from database on startup
-    await this.loadCredentialsFromDb();
-    this.logger.log('MT5 Service initialized');
+    // Load credentials from database on startup (don't block if it fails)
+    try {
+      await this.loadCredentialsFromDb();
+      this.logger.log('MT5 Service initialized');
+    } catch (error) {
+      this.logger.warn('MT5 Service initialized (could not load credentials from DB)');
+    }
   }
 
   /**
@@ -102,10 +106,10 @@ export class Mt5Service implements OnModuleInit {
         order: { updatedAt: 'DESC' },
       });
       
-      if (connection && connection.user && connection.password && connection.host) {
+      if (connection && connection.user && (connection as any).password && connection.host) {
         this.dynamicCredentials = {
           user: connection.user,
-          password: connection.password,
+          password: (connection as any).password,
           host: connection.host,
           port: connection.port?.toString() || '443',
         };
