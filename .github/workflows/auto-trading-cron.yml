@@ -2,8 +2,8 @@ name: Auto Trading Cron
 
 on:
   schedule:
-    # Run every 15 minutes
-    - cron: '*/15 * * * *'
+    # Run every 5 minutes for aggressive scalping
+    - cron: '*/5 * * * *'
   workflow_dispatch: # Allow manual trigger
 
 jobs:
@@ -12,9 +12,16 @@ jobs:
     steps:
       - name: Trigger Trading Cycle
         run: |
-          curl -X GET "${{ secrets.BACKEND_URL }}/trading/trigger" \
+          response=$(curl -s -X GET "${{ secrets.BACKEND_URL }}/trading/trigger" \
             -H "Content-Type: application/json" \
-            --max-time 120 \
-            --retry 3
+            --max-time 180 \
+            --retry 2)
+          echo "Response: $response"
+          # Check if the response contains success
+          if echo "$response" | grep -q '"success":true'; then
+            echo "✅ Trading cycle completed successfully"
+          else
+            echo "⚠️ Trading cycle returned: $response"
+          fi
         env:
           BACKEND_URL: ${{ secrets.BACKEND_URL }}

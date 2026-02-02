@@ -136,14 +136,107 @@ export class AutoTradingService implements OnModuleInit {
 
   /**
    * Manually trigger trading cycle
+   * IMPORTANT: Must await the cycle for serverless environments (Vercel)
    */
-  async manualTrigger(): Promise<{ success: boolean; message: string }> {
+  async manualTrigger(): Promise<{ success: boolean; message: string; signal?: any; trade?: any }> {
     if (this.isRunning) {
       return { success: false, message: 'Trading cycle already running' };
     }
 
-    this.runTradingCycle();
-    return { success: true, message: 'Trading cycle started' };
+    // Must await for serverless - otherwise function terminates before completion
+    const result = await this.runTradingCycleWithResult();
+    return result;
+  }
+
+  /**
+   * Run trading cycle and return the result (for serverless environments)
+   */
+  async runTradingCycleWithResult(): Promise<{ success: boolean; message: string; signal?: any; trade?: any }> {
+    if (this.isRunning) {
+      return { success: false, message: 'Trading cycle already running' };
+    }
+
+    if (!this.isEnabled) {
+      return { success: false, message: 'Auto trading is disabled' };
+    }
+
+    this.isRunning = true;
+    const startTime = Date.now();
+
+    try {
+      const symbol = this.configService.get('TRADING_SYMBOL', 'XAUUSDm');
+      const timeframe = this.configService.get('TRADING_TIMEFRAME', 'M15');
+
+      await this.tradingService.logEvent(
+        TradingEventType.CRON_EXECUTION,
+        `Starting trading cycle for ${symbol} ${timeframe}`,
+        { symbol, timeframe, timestamp: new Date().toISOString() },
+      );
+
+      this.logger.log(`🔄 Running trading cycle for ${symbol} on ${timeframe} timeframe`);
+
+      // Step 1: Generate trading signal
+      const signal = await this.tradingService.analyzeAndGenerateSignal(symbol, timeframe);
+
+      if (!signal) {
+        this.logger.log('No signal generated');
+        return { success: true, message: 'No trading signal generated', signal: null };
+      }
+
+      this.logger.log(`📊 Signal: ${signal.signalType} | Confidence: ${signal.confidence}% | Strength: ${signal.strength}`);
+
+      // Step 2: Execute trade if signal is actionable
+      let trade = null;
+      if (signal.signalType !== 'HOLD' && signal.confidence >= 30) {
+        trade = await this.tradingService.executeTrade(signal);
+        
+        if (trade) {
+          this.logger.log(`✅ Trade executed: ${trade.direction} ${trade.lotSize} ${trade.symbol} @ ${trade.entryPrice}`);
+        } else {
+          this.logger.log('⏸️ Trade not executed (conditions not met)');
+        }
+      } else {
+        this.logger.log(`⏸️ Signal not actionable: ${signal.signalType} with ${signal.confidence}% confidence`);
+      }
+
+      const duration = Date.now() - startTime;
+      await this.tradingService.logEvent(
+        TradingEventType.CRON_EXECUTION,
+        `Trading cycle completed in ${duration}ms`,
+        { duration, signalId: signal?.id, tradeId: trade?.id },
+      );
+
+      return {
+        success: true,
+        message: trade ? `Trade executed: ${trade.direction} @ ${trade.entryPrice}` : `Signal: ${signal.signalType} (${signal.confidence}% confidence)`,
+        signal: {
+          id: signal.id,
+          type: signal.signalType,
+          confidence: signal.confidence,
+          entryPrice: signal.entryPrice,
+          stopLoss: signal.stopLoss,
+          takeProfit: signal.takeProfit,
+        },
+        trade: trade ? {
+          id: trade.id,
+          direction: trade.direction,
+          entryPrice: trade.entryPrice,
+          lotSize: trade.lotSize,
+        } : null,
+      };
+
+    } catch (error) {
+      this.logger.error('Trading cycle failed', error);
+      await this.tradingService.logEvent(
+        TradingEventType.ERROR,
+        `Trading cycle error: ${error.message}`,
+        { error: error.message, stack: error.stack },
+        'error',
+      );
+      return { success: false, message: `Trading cycle failed: ${error.message}` };
+    } finally {
+      this.isRunning = false;
+    }
   }
 
   /**
