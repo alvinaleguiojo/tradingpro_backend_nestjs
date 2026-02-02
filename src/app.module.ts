@@ -35,16 +35,17 @@ import { HealthController } from './health.controller';
         ssl: configService.get('DATABASE_HOST', '').includes('supabase') 
           ? { rejectUnauthorized: false } 
           : false,
-        // Serverless connection pooling settings - optimized for Vercel
+        // Serverless connection pooling settings - optimized for Supabase free tier
         extra: {
-          max: 3, // Slightly more connections for concurrent requests
+          max: 1, // Only 1 connection per serverless instance to avoid MaxClientsInSessionMode
           min: 0,
-          idleTimeoutMillis: 5000, // Close idle connections faster
-          connectionTimeoutMillis: 15000, // Increased timeout for Supabase
+          idleTimeoutMillis: 1000, // Close idle connections very fast
+          connectionTimeoutMillis: 10000, // 10 second connection timeout
           statement_timeout: 30000, // 30 second query timeout
+          keepAlive: false, // Don't keep connections alive in serverless
         },
-        retryAttempts: 3, // Retry on connection failure
-        retryDelay: 1000, // 1 second between retries
+        retryAttempts: 2, // Fewer retries to fail faster
+        retryDelay: 500, // 0.5 second between retries
       }),
     }),
 
