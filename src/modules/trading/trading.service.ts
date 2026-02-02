@@ -88,7 +88,18 @@ export class TradingService {
         volume: c.tickVolume,
       }));
 
-      // Perform ICT analysis
+      // Check for high-impact news times
+      if (this.ictStrategyService.isHighImpactNewsTime()) {
+        await this.logEvent(
+          TradingEventType.MARKET_ANALYSIS,
+          'Skipping analysis - High-impact news time',
+          { symbol, timeframe },
+          'info',
+        );
+        return null;
+      }
+
+      // Perform SMC analysis
       const ictAnalysis = this.ictStrategyService.analyzeMarket(
         formattedCandles,
         symbol,
@@ -98,6 +109,38 @@ export class TradingService {
       // Get current price
       const quote = await this.mt5Service.getQuote(symbol);
       const currentPrice = quote?.bid || formattedCandles[formattedCandles.length - 1].close;
+
+      // If we have a trade setup, get HTF confirmation
+      if (ictAnalysis.tradeSetup) {
+        // Get H1 candles for HTF confirmation
+        const h1Candles = await this.mt5Service.getPriceHistory(symbol, 'H1', 100);
+        const h1Formatted: Candle[] = h1Candles.map(c => ({
+          time: c.time,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+          volume: c.tickVolume,
+        }));
+
+        const htfConfirmation = this.ictStrategyService.getHTFConfirmation(
+          h1Formatted,
+          ictAnalysis.tradeSetup.direction,
+        );
+
+        // Add HTF confluence to confidence
+        if (htfConfirmation.confirmed) {
+          ictAnalysis.tradeSetup.confidence = Math.min(100, 
+            ictAnalysis.tradeSetup.confidence + htfConfirmation.confluenceBonus
+          );
+          ictAnalysis.tradeSetup.reasons.push(`H1 ${htfConfirmation.htfTrend} trend confirmation`);
+          this.logger.log(`✅ HTF Confirmation: ${htfConfirmation.htfTrend} trend (+${htfConfirmation.confluenceBonus}% confidence)`);
+        } else {
+          // Reduce confidence if trading against HTF trend
+          ictAnalysis.tradeSetup.confidence = Math.max(0, ictAnalysis.tradeSetup.confidence - 20);
+          this.logger.log(`⚠️ HTF Divergence: ${htfConfirmation.htfTrend} trend (-20% confidence)`);
+        }
+      }
 
       // Get AI recommendation
       const aiRecommendation = await this.openAiService.analyzeMarket(

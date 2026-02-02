@@ -388,6 +388,96 @@ export class IctStrategyService {
   }
 
   /**
+   * Check if HTF (Higher Time Frame) confirms the trade direction
+   * This significantly improves win rate by trading with the bigger trend
+   */
+  getHTFConfirmation(
+    htfCandles: Candle[],
+    tradeDirection: 'BUY' | 'SELL',
+  ): { confirmed: boolean; htfTrend: string; confluenceBonus: number } {
+    const htfStructure = this.marketStructureService.analyzeMarketStructure(htfCandles);
+    const htfTrend = htfStructure.trend;
+
+    // BUY needs bullish HTF, SELL needs bearish HTF
+    const confirmed = 
+      (tradeDirection === 'BUY' && htfTrend === 'BULLISH') ||
+      (tradeDirection === 'SELL' && htfTrend === 'BEARISH');
+
+    // Extra bonus if HTF has BOS or CHoCH
+    let confluenceBonus = 0;
+    if (confirmed) {
+      confluenceBonus = 15;
+      if (htfStructure.breakOfStructure) confluenceBonus += 10;
+      if (htfStructure.changeOfCharacter) confluenceBonus += 10;
+    }
+
+    return { confirmed, htfTrend, confluenceBonus };
+  }
+
+  /**
+   * Check if it's a high-impact news time (avoid trading)
+   * XAU/USD major news: FOMC, NFP, CPI
+   */
+  isHighImpactNewsTime(): boolean {
+    const now = new Date();
+    const dayOfWeek = now.getUTCDay();
+    const hour = now.getUTCHours();
+    const date = now.getUTCDate();
+
+    // Skip NFP day (first Friday of month)
+    if (dayOfWeek === 5 && date <= 7) {
+      if (hour >= 12 && hour <= 15) { // 12:30-15:30 UTC
+        return true;
+      }
+    }
+
+    // Skip FOMC days (Wednesday 18:00-20:00 UTC) - simplified check
+    if (dayOfWeek === 3 && hour >= 17 && hour <= 20) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Calculate optimal position size based on ATR
+   * Bigger stop for volatile markets, smaller for calm markets
+   */
+  getATRBasedStopLoss(
+    candles: Candle[],
+    direction: 'BUY' | 'SELL',
+    currentPrice: number,
+    multiplier: number = 1.5,
+  ): { stopLoss: number; atr: number } {
+    // Calculate ATR (Average True Range) for last 14 candles
+    const atrPeriod = 14;
+    const recentCandles = candles.slice(-atrPeriod - 1);
+    
+    let atrSum = 0;
+    for (let i = 1; i < recentCandles.length; i++) {
+      const high = recentCandles[i].high;
+      const low = recentCandles[i].low;
+      const prevClose = recentCandles[i - 1].close;
+      
+      const tr = Math.max(
+        high - low,
+        Math.abs(high - prevClose),
+        Math.abs(low - prevClose),
+      );
+      atrSum += tr;
+    }
+    
+    const atr = atrSum / atrPeriod;
+    const stopDistance = atr * multiplier;
+
+    const stopLoss = direction === 'BUY'
+      ? currentPrice - stopDistance
+      : currentPrice + stopDistance;
+
+    return { stopLoss, atr };
+  }
+
+  /**
    * Get empty analysis result
    */
   private getEmptyAnalysis(symbol: string, timeframe: string): IctAnalysisResult {
@@ -432,6 +522,11 @@ export class IctStrategyService {
       return { shouldTrade: false, reason: 'Insufficient data' };
     }
 
+    // Check for high-impact news
+    if (this.isHighImpactNewsTime()) {
+      return { shouldTrade: false, reason: 'High-impact news time - avoiding market' };
+    }
+
     // Check trading day
     if (!this.killZoneService.isHighProbabilityDay()) {
       return { shouldTrade: false, reason: 'Low probability trading day' };
@@ -451,5 +546,45 @@ export class IctStrategyService {
     }
 
     return { shouldTrade: true, reason: `In ${killZone.name}` };
+  }
+
+  /**
+   * Calculate partial take profit levels (scale out strategy)
+   * Take 50% profit at TP1, let rest run to TP2
+   */
+  getPartialTakeProfits(
+    entryPrice: number,
+    stopLoss: number,
+    direction: 'BUY' | 'SELL',
+  ): { tp1: number; tp2: number; tp3: number } {
+    const risk = Math.abs(entryPrice - stopLoss);
+
+    if (direction === 'BUY') {
+      return {
+        tp1: entryPrice + risk * 1.5,  // 1.5 RR - Take 50% profit
+        tp2: entryPrice + risk * 2.5,  // 2.5 RR - Take 30% profit
+        tp3: entryPrice + risk * 4.0,  // 4.0 RR - Let 20% run
+      };
+    } else {
+      return {
+        tp1: entryPrice - risk * 1.5,
+        tp2: entryPrice - risk * 2.5,
+        tp3: entryPrice - risk * 4.0,
+      };
+    }
+  }
+
+  /**
+   * Get breakeven level - move SL to entry after hitting TP1
+   */
+  getBreakevenLevel(
+    entryPrice: number,
+    direction: 'BUY' | 'SELL',
+    spreadBuffer: number = 1.0, // In price points (e.g., $1 for gold)
+  ): number {
+    // Add small buffer for spread to ensure BE
+    return direction === 'BUY'
+      ? entryPrice + spreadBuffer
+      : entryPrice - spreadBuffer;
   }
 }
