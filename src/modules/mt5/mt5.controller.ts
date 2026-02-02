@@ -176,4 +176,20 @@ export class Mt5Controller {
       },
     };
   }
+
+  @Get('trade-history')
+  @ApiOperation({ summary: 'Get closed trade history' })
+  @ApiQuery({ name: 'days', required: false, example: 30 })
+  async getTradeHistory(@Query('days') days: number = 30) {
+    const history = await this.mt5Service.getTradeHistory(days);
+    return { success: true, data: history, count: history.length };
+  }
+
+  @Get('deals')
+  @ApiOperation({ summary: 'Get deals history (includes deposits/withdrawals)' })
+  @ApiQuery({ name: 'days', required: false, example: 30 })
+  async getDealsHistory(@Query('days') days: number = 30) {
+    const deals = await this.mt5Service.getDealsHistory(days);
+    return { success: true, data: deals, count: deals.length };
+  }
 }

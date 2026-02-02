@@ -544,6 +544,64 @@ export class Mt5Service implements OnModuleInit {
     }
   }
 
+  /**
+   * Get trade history (closed orders/deals) from MT5
+   * @param days Number of days of history to fetch (default 30)
+   */
+  async getTradeHistory(days: number = 30): Promise<any[]> {
+    await this.checkConnection();
+
+    try {
+      // Calculate date range
+      const dateTo = new Date();
+      const dateFrom = new Date();
+      dateFrom.setDate(dateFrom.getDate() - days);
+
+      const response = await this.axiosClient.get('/OrderHistory', {
+        params: {
+          id: this.token,
+          from: dateFrom.toISOString().split('T')[0],
+          to: dateTo.toISOString().split('T')[0],
+        },
+      });
+      
+      this.logger.log(`Fetched ${response.data?.length || 0} historical orders`);
+      return response.data || [];
+    } catch (error) {
+      this.logger.error('Failed to get trade history', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get deals history (including deposits/withdrawals) from MT5
+   * @param days Number of days of history to fetch (default 30)
+   */
+  async getDealsHistory(days: number = 30): Promise<any[]> {
+    await this.checkConnection();
+
+    try {
+      // Calculate date range
+      const dateTo = new Date();
+      const dateFrom = new Date();
+      dateFrom.setDate(dateFrom.getDate() - days);
+
+      const response = await this.axiosClient.get('/DealsHistory', {
+        params: {
+          id: this.token,
+          from: dateFrom.toISOString().split('T')[0],
+          to: dateTo.toISOString().split('T')[0],
+        },
+      });
+      
+      this.logger.log(`Fetched ${response.data?.length || 0} deals`);
+      return response.data || [];
+    } catch (error) {
+      this.logger.error('Failed to get deals history', error);
+      return [];
+    }
+  }
+
   getToken(): string | null {
     return this.token;
   }
