@@ -39,11 +39,11 @@ import { HealthController } from './health.controller';
           logging: false,
           ssl: isSupabase ? { rejectUnauthorized: false } : false,
           
-          // CRITICAL: Ultra-minimal pool for Supabase Session Mode
-          // Session mode has VERY limited connections (~10-20 on free tier)
-          // Each Vercel function instance needs its own connection
+          // CRITICAL: Configuration for Supabase Transaction Mode (PgBouncer)
+          // Transaction mode allows many more concurrent connections
+          // IMPORTANT: Use port 6543 (pooler) not 5432 (direct)
           extra: {
-            // SINGLE connection per serverless function to avoid pool exhaustion
+            // Minimal pool for serverless - let PgBouncer handle pooling
             max: 1, // Only 1 connection per function instance
             min: 0, // No minimum, create on demand
             
@@ -73,9 +73,12 @@ import { HealthController } from './health.controller';
             // Propagate create error to fail fast
             propagateCreateError: true,
             
-            // PgBouncer compatibility - REQUIRED for Supabase Session Mode
-            // These prevent prepared statement issues with PgBouncer
+            // PgBouncer Transaction Mode compatibility
             application_name: 'tradingpro_backend',
+            
+            // CRITICAL: Required for PgBouncer Transaction Mode
+            // Disables prepared statements which don't work in transaction mode
+            prepare: false,
           },
           
           // TypeORM retry settings - longer delays to let pool clear
