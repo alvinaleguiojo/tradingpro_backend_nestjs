@@ -575,6 +575,7 @@ export class Mt5Service implements OnModuleInit {
 
   /**
    * Get deals history (including deposits/withdrawals) from MT5
+   * Note: mtapi.io may not have a DealsHistory endpoint, so we use OrderHistory as fallback
    * @param days Number of days of history to fetch (default 30)
    */
   async getDealsHistory(days: number = 30): Promise<any[]> {
@@ -586,18 +587,24 @@ export class Mt5Service implements OnModuleInit {
       const dateFrom = new Date();
       dateFrom.setDate(dateFrom.getDate() - days);
 
-      const response = await this.axiosClient.get('/DealsHistory', {
-        params: {
-          id: this.token,
-          from: dateFrom.toISOString().split('T')[0],
-          to: dateTo.toISOString().split('T')[0],
-        },
-      });
-      
-      this.logger.log(`Fetched ${response.data?.length || 0} deals`);
-      return response.data || [];
+      // Try HistoryDeals endpoint first (correct mtapi.io naming)
+      try {
+        const response = await this.axiosClient.get('/HistoryDeals', {
+          params: {
+            id: this.token,
+            from: dateFrom.toISOString().split('T')[0],
+            to: dateTo.toISOString().split('T')[0],
+          },
+        });
+        this.logger.log(`Fetched ${response.data?.length || 0} deals from HistoryDeals`);
+        return response.data || [];
+      } catch (e) {
+        // If HistoryDeals doesn't exist, fall back to OrderHistory
+        this.logger.warn('HistoryDeals endpoint not available, using OrderHistory as fallback');
+        return await this.getTradeHistory(days);
+      }
     } catch (error) {
-      this.logger.error('Failed to get deals history', error);
+      this.logger.error('Failed to get deals history', error.message || error);
       return [];
     }
   }
