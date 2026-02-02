@@ -205,7 +205,7 @@ export class MoneyManagementService implements OnModuleInit {
       });
       
       await withRetry(
-        () => this.accountStateRepo.save(state),
+        () => this.accountStateRepo.save(state!),
         { operationName: 'Save account state', maxRetries: 3 }
       );
       this.logger.log(`Created account state for ${accountId} at level ${level.level}`);

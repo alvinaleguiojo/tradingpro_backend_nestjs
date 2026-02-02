@@ -217,9 +217,7 @@ export class TradingService implements OnModuleInit {
         timeframe,
       );
 
-      // Get current price
-      const quote = await this.mt5Service.getQuote(symbol);
-      const currentPrice = quote?.bid || formattedCandles[formattedCandles.length - 1].close;
+      // currentPrice already defined above
 
       // If we have a trade setup, get HTF confirmation
       if (ictAnalysis.tradeSetup) {
