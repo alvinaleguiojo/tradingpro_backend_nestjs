@@ -30,7 +30,7 @@ import { HealthController } from './health.controller';
         password: configService.get('DATABASE_PASSWORD', 'postgres'),
         database: configService.get('DATABASE_NAME', 'tradingpro'),
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
-        synchronize: true, // Set to false in production
+        synchronize: configService.get('NODE_ENV') !== 'production', // Disabled in production to avoid timeouts
         logging: false,
         ssl: configService.get('DATABASE_HOST', '').includes('supabase') 
           ? { rejectUnauthorized: false } 
