@@ -14,7 +14,7 @@ import {
 
 @Injectable()
 export class IctStrategyService {
-  private readonly logger = new Logger(IctStrategyService.name);
+  private readonly logger = new Logger('SmcStrategyService');
 
   constructor(
     private marketStructureService: MarketStructureService,
@@ -25,7 +25,7 @@ export class IctStrategyService {
   ) {}
 
   /**
-   * Perform complete ICT analysis on price data
+   * Perform complete SMC (Smart Money Concepts) analysis on price data
    */
   analyzeMarket(
     candles: Candle[],
@@ -110,7 +110,8 @@ export class IctStrategyService {
   }
 
   /**
-   * Generate trade setup based on ICT analysis
+   * Generate trade setup based on SMC (Smart Money Concepts) analysis
+   * SMC focuses on: Liquidity sweeps, Order Blocks, Market Structure, FVGs
    */
   private generateTradeSetup(params: {
     candles: Candle[];
@@ -144,146 +145,147 @@ export class IctStrategyService {
     const confluences: string[] = [];
     let confidence = 0;
 
-    // Check if we're in a kill zone (higher probability)
-    const inKillZone = currentKillZone !== null;
-    if (inKillZone) {
-      confluences.push(`In ${currentKillZone.name}`);
-      confidence += 20;
+    // SMC Core Concept 1: Check for liquidity sweep (stop hunt)
+    const recentCandles = candles.slice(-10);
+    const liquiditySweep = this.detectLiquiditySweep(recentCandles, candles.slice(-50));
+    
+    if (liquiditySweep) {
+      reasons.push(`Liquidity sweep detected (${liquiditySweep.type})`);
+      confidence += 25;
     }
 
-    // Bonus for clear trending market
-    if (marketStructure.trend !== 'RANGING') {
-      confluences.push(`Clear ${marketStructure.trend} trend`);
+    // SMC Core Concept 2: Market Structure - BOS or CHoCH
+    if (marketStructure.breakOfStructure) {
+      reasons.push('Break of Structure (BOS) confirmed');
+      confidence += 20;
+    }
+    
+    if (marketStructure.changeOfCharacter) {
+      reasons.push('Change of Character (CHoCH) detected');
+      confidence += 25;
+    }
+
+    // SMC Core Concept 3: Premium/Discount zone
+    const priceRange = this.calculatePriceRange(candles.slice(-100));
+    const zone = this.getPremiumDiscountZone(currentPrice, priceRange);
+    
+    if (zone !== 'EQUILIBRIUM') {
+      confluences.push(`Price in ${zone} zone`);
       confidence += 10;
     }
 
-    // Check if it's a high probability trading day
-    if (!this.killZoneService.isHighProbabilityDay()) {
-      return null; // Don't trade on low probability days
-    }
-
-    // Determine trade direction based on confluences
+    // Determine trade direction based on SMC concepts
     let direction: 'BUY' | 'SELL' | null = null;
 
-    // 1. Check Market Structure
-    if (marketStructure.trend === 'BULLISH' && !marketStructure.breakOfStructure) {
-      reasons.push('Bullish market structure');
-      confidence += 20;
-      direction = 'BUY';
-    } else if (marketStructure.trend === 'BEARISH' && !marketStructure.breakOfStructure) {
-      reasons.push('Bearish market structure');
-      confidence += 20;
-      direction = 'SELL';
+    // Primary: Use liquidity sweep direction
+    if (liquiditySweep) {
+      // After sweeping lows, smart money buys (price reverses up)
+      // After sweeping highs, smart money sells (price reverses down)
+      direction = liquiditySweep.type === 'LOW_SWEEP' ? 'BUY' : 'SELL';
+      
+      // Extra confidence if sweep aligns with CHoCH
+      if (marketStructure.changeOfCharacter) {
+        confidence += 15;
+        confluences.push('Liquidity sweep + CHoCH alignment');
+      }
     }
-
-    // 2. Check for Change of Character (reversal signal)
-    if (marketStructure.changeOfCharacter) {
-      reasons.push('Change of Character detected');
-      confidence += 10;
-      // CHoCH indicates potential reversal
-      direction = marketStructure.trend === 'BULLISH' ? 'SELL' : 'BUY';
-    }
-
-    // 3. Session bias alignment
-    if (sessionBias !== 'NEUTRAL') {
-      if ((sessionBias === 'BULLISH' && direction === 'BUY') ||
-          (sessionBias === 'BEARISH' && direction === 'SELL')) {
-        confluences.push('Session bias aligned');
+    // Secondary: Use market structure trend
+    else if (marketStructure.trend !== 'RANGING') {
+      if (marketStructure.trend === 'BULLISH' && zone === 'DISCOUNT') {
+        direction = 'BUY';
+        reasons.push('Bullish trend + Discount zone');
+        confidence += 15;
+      } else if (marketStructure.trend === 'BEARISH' && zone === 'PREMIUM') {
+        direction = 'SELL';
+        reasons.push('Bearish trend + Premium zone');
+        confidence += 15;
+      } else {
+        // Follow the trend
+        direction = marketStructure.trend === 'BULLISH' ? 'BUY' : 'SELL';
+        reasons.push(`Following ${marketStructure.trend} trend`);
         confidence += 10;
-      } else if (direction === null) {
-        direction = sessionBias === 'BULLISH' ? 'BUY' : 'SELL';
-        reasons.push(`${sessionBias} session bias`);
+      }
+    }
+
+    // Tertiary: Use session bias
+    if (!direction && sessionBias !== 'NEUTRAL') {
+      direction = sessionBias === 'BULLISH' ? 'BUY' : 'SELL';
+      reasons.push(`${sessionBias} session bias`);
+      confidence += 10;
+    }
+
+    if (!direction) {
+      return null; // No clear SMC setup
+    }
+
+    // SMC Core Concept 4: Order Block confluence
+    if (direction === 'BUY' && nearestBullishOB) {
+      const distanceToOB = (currentPrice - nearestBullishOB.high) / currentPrice;
+      if (distanceToOB < 0.005) { // Within 0.5% of OB
+        confluences.push('Price at Demand zone (Bullish OB)');
+        confidence += 15;
+      }
+    } else if (direction === 'SELL' && nearestBearishOB) {
+      const distanceToOB = (nearestBearishOB.low - currentPrice) / currentPrice;
+      if (distanceToOB < 0.005) {
+        confluences.push('Price at Supply zone (Bearish OB)');
         confidence += 15;
       }
     }
 
-    if (!direction) {
-      return null; // No clear direction
+    // SMC Core Concept 5: Imbalance/FVG confluence
+    const relevantFVG = unfilledFVGs.find(fvg => {
+      if (direction === 'BUY' && fvg.type === 'BULLISH') {
+        return fvg.high < currentPrice && (currentPrice - fvg.high) / currentPrice < 0.003;
+      } else if (direction === 'SELL' && fvg.type === 'BEARISH') {
+        return fvg.low > currentPrice && (fvg.low - currentPrice) / currentPrice < 0.003;
+      }
+      return false;
+    });
+    
+    if (relevantFVG) {
+      confluences.push('Unfilled imbalance (FVG) nearby');
+      confidence += 10;
     }
 
-    // Calculate entry, SL, and TP based on direction
+    // Bonus: Kill zone timing
+    if (currentKillZone) {
+      confluences.push(`Active session: ${currentKillZone.name}`);
+      confidence += 10;
+    }
+
+    // Calculate entry, SL, and TP using SMC principles
     let entryPrice = currentPrice;
     let stopLoss: number;
     let takeProfit: number;
 
     if (direction === 'BUY') {
-      // Look for entry at bullish OB or bullish FVG
-      if (nearestBullishOB) {
-        // Check if price is at or near the OB
-        const obDistance = (currentPrice - nearestBullishOB.high) / currentPrice;
-        if (obDistance < 0.002) { // Within 0.2%
-          entryPrice = nearestBullishOB.midpoint;
-          stopLoss = nearestBullishOB.low - (nearestBullishOB.high - nearestBullishOB.low) * 0.5;
-          confluences.push('Entry at bullish Order Block');
-          confidence += 15;
-        } else {
-          entryPrice = currentPrice;
-          stopLoss = nearestBullishOB.low;
-        }
-        reasons.push('Bullish Order Block support');
-      } else {
-        // Use swing low for stop loss
-        const swingLow = marketStructure.currentSwingLow;
-        stopLoss = swingLow ? swingLow.price : currentPrice * 0.995;
-      }
+      // SL below recent swing low or OB
+      const swingLow = marketStructure.currentSwingLow?.price || currentPrice * 0.995;
+      const obLow = nearestBullishOB?.low || swingLow;
+      stopLoss = Math.min(swingLow, obLow) * 0.999; // Slight buffer
 
-      // Check for bullish FVG confluence
-      const bullishFVG = unfilledFVGs.find(fvg => 
-        fvg.type === 'BULLISH' && 
-        fvg.high < currentPrice &&
-        (currentPrice - fvg.high) / currentPrice < 0.003
-      );
-      if (bullishFVG) {
-        confluences.push('Unfilled bullish FVG below');
-        confidence += 10;
-      }
-
-      // Set take profit at nearest sell-side liquidity or 2:1 RR
+      // TP at liquidity above or 2:1 minimum
       const riskAmount = entryPrice - stopLoss;
-      const targetLiquidity = buyLiquidity[0];
+      const liquidityTarget = buyLiquidity[0]?.price;
       
-      if (targetLiquidity && targetLiquidity.price > entryPrice) {
-        takeProfit = targetLiquidity.price;
+      if (liquidityTarget && liquidityTarget > entryPrice + riskAmount * 1.5) {
+        takeProfit = liquidityTarget;
         confluences.push('Targeting buy-side liquidity');
       } else {
-        takeProfit = entryPrice + (riskAmount * 2); // 2:1 RR
+        takeProfit = entryPrice + (riskAmount * 2);
       }
-
     } else {
-      // SELL setup
-      if (nearestBearishOB) {
-        const obDistance = (nearestBearishOB.low - currentPrice) / currentPrice;
-        if (obDistance < 0.002) {
-          entryPrice = nearestBearishOB.midpoint;
-          stopLoss = nearestBearishOB.high + (nearestBearishOB.high - nearestBearishOB.low) * 0.5;
-          confluences.push('Entry at bearish Order Block');
-          confidence += 15;
-        } else {
-          entryPrice = currentPrice;
-          stopLoss = nearestBearishOB.high;
-        }
-        reasons.push('Bearish Order Block resistance');
-      } else {
-        const swingHigh = marketStructure.currentSwingHigh;
-        stopLoss = swingHigh ? swingHigh.price : currentPrice * 1.005;
-      }
-
-      // Check for bearish FVG confluence
-      const bearishFVG = unfilledFVGs.find(fvg =>
-        fvg.type === 'BEARISH' &&
-        fvg.low > currentPrice &&
-        (fvg.low - currentPrice) / currentPrice < 0.003
-      );
-      if (bearishFVG) {
-        confluences.push('Unfilled bearish FVG above');
-        confidence += 10;
-      }
+      // SELL
+      const swingHigh = marketStructure.currentSwingHigh?.price || currentPrice * 1.005;
+      const obHigh = nearestBearishOB?.high || swingHigh;
+      stopLoss = Math.max(swingHigh, obHigh) * 1.001;
 
       const riskAmount = stopLoss - entryPrice;
-      const targetLiquidity = sellLiquidity[0];
+      const liquidityTarget = sellLiquidity[0]?.price;
       
-      if (targetLiquidity && targetLiquidity.price < entryPrice) {
-        takeProfit = targetLiquidity.price;
+      if (liquidityTarget && liquidityTarget < entryPrice - riskAmount * 1.5) {
+        takeProfit = liquidityTarget;
         confluences.push('Targeting sell-side liquidity');
       } else {
         takeProfit = entryPrice - (riskAmount * 2);
@@ -295,17 +297,13 @@ export class IctStrategyService {
     const reward = Math.abs(takeProfit - entryPrice);
     const riskRewardRatio = reward / risk;
 
-    // Minimum requirements for trade
-    if (confidence < 30) {
-      return null; // Not enough confidence
+    // SMC minimum requirements - more lenient for smart money setups
+    if (confidence < 25) {
+      return null;
     }
 
-    if (riskRewardRatio < 1.2) {
-      return null; // RR too low
-    }
-
-    if (reasons.length < 1) {
-      return null; // Not enough reasons
+    if (riskRewardRatio < 1.0) {
+      return null;
     }
 
     // Cap confidence at 100
@@ -321,6 +319,72 @@ export class IctStrategyService {
       reasons,
       confluences,
     };
+  }
+
+  /**
+   * Detect liquidity sweep (stop hunt) - core SMC concept
+   */
+  private detectLiquiditySweep(
+    recentCandles: Candle[],
+    lookbackCandles: Candle[],
+  ): { type: 'HIGH_SWEEP' | 'LOW_SWEEP'; price: number } | null {
+    if (recentCandles.length < 3 || lookbackCandles.length < 20) return null;
+
+    const lookbackHigh = Math.max(...lookbackCandles.slice(0, -5).map(c => c.high));
+    const lookbackLow = Math.min(...lookbackCandles.slice(0, -5).map(c => c.low));
+    
+    const lastCandle = recentCandles[recentCandles.length - 1];
+    const prevCandle = recentCandles[recentCandles.length - 2];
+
+    // High sweep: Price wicks above previous high then closes back below
+    if (lastCandle.high > lookbackHigh && lastCandle.close < lookbackHigh) {
+      return { type: 'HIGH_SWEEP', price: lookbackHigh };
+    }
+    
+    // Also check if previous candle swept and current is reversing
+    if (prevCandle.high > lookbackHigh && lastCandle.close < prevCandle.open) {
+      return { type: 'HIGH_SWEEP', price: lookbackHigh };
+    }
+
+    // Low sweep: Price wicks below previous low then closes back above
+    if (lastCandle.low < lookbackLow && lastCandle.close > lookbackLow) {
+      return { type: 'LOW_SWEEP', price: lookbackLow };
+    }
+    
+    if (prevCandle.low < lookbackLow && lastCandle.close > prevCandle.open) {
+      return { type: 'LOW_SWEEP', price: lookbackLow };
+    }
+
+    return null;
+  }
+
+  /**
+   * Calculate price range for premium/discount zones
+   */
+  private calculatePriceRange(candles: Candle[]): { high: number; low: number; equilibrium: number } {
+    const high = Math.max(...candles.map(c => c.high));
+    const low = Math.min(...candles.map(c => c.low));
+    return {
+      high,
+      low,
+      equilibrium: (high + low) / 2,
+    };
+  }
+
+  /**
+   * Determine if price is in premium, discount, or equilibrium zone
+   */
+  private getPremiumDiscountZone(
+    currentPrice: number,
+    range: { high: number; low: number; equilibrium: number },
+  ): 'PREMIUM' | 'DISCOUNT' | 'EQUILIBRIUM' {
+    const rangeSize = range.high - range.low;
+    const upperThreshold = range.equilibrium + rangeSize * 0.2;
+    const lowerThreshold = range.equilibrium - rangeSize * 0.2;
+
+    if (currentPrice > upperThreshold) return 'PREMIUM';
+    if (currentPrice < lowerThreshold) return 'DISCOUNT';
+    return 'EQUILIBRIUM';
   }
 
   /**
