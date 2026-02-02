@@ -139,10 +139,6 @@ export class KillZoneService {
       timezoneSource: this.timezoneSource,
     };
   }
-      brokerHour: brokerTime.getHours(),
-      utcTime: new Date().toISOString(),
-    };
-  }
 
   /**
    * Check if we're in a high-probability trading window
@@ -264,7 +260,8 @@ export class KillZoneService {
     let nearestZone: { name: string; minutes: number } | null = null;
     let minMinutes = Infinity;
     
-    for (const zone of this.killZones) {
+    const killZones = this.getKillZones();
+    for (const zone of killZones) {
       const zoneStartMinutes = zone.startHour * 60;
       let minutesUntil = zoneStartMinutes - totalMinutesNow;
       
