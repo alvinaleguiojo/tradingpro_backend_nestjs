@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Query, Body, Param } from '@nestjs/common';
+import { Controller, Get, Post, Query, Body, Param, Headers } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery, ApiBody } from '@nestjs/swagger';
 import { TradingService } from './trading.service';
 import { AutoTradingService } from './auto-trading.service';
@@ -23,6 +23,15 @@ export class TradingController {
   @Post('trigger')
   @ApiOperation({ summary: 'Manually trigger trading cycle' })
   async triggerTradingCycle() {
+    const result = await this.autoTradingService.manualTrigger();
+    return result;
+  }
+
+  @Get('trigger')
+  @ApiOperation({ summary: 'Trigger trading cycle (for Vercel Cron)' })
+  async triggerTradingCycleGet(@Headers('authorization') authHeader: string) {
+    // Vercel Cron sends CRON_SECRET in authorization header
+    // You can add validation here if needed
     const result = await this.autoTradingService.manualTrigger();
     return result;
   }
