@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { TradingService } from './trading.service';
 import { TradingEventType } from '../../entities/trading-log.entity';
+import { Trade } from '../../entities/trade.entity';
 
 @Injectable()
 export class AutoTradingService implements OnModuleInit {
@@ -186,7 +187,7 @@ export class AutoTradingService implements OnModuleInit {
       this.logger.log(`📊 Signal: ${signal.signalType} | Confidence: ${signal.confidence}% | Strength: ${signal.strength}`);
 
       // Step 2: Execute trade if signal is actionable
-      let trade = null;
+      let trade: Trade | null = null;
       if (signal.signalType !== 'HOLD' && signal.confidence >= 30) {
         trade = await this.tradingService.executeTrade(signal);
         
