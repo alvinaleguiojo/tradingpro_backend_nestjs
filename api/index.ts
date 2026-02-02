@@ -1,5 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from '../src/app.module';
 import { ExpressAdapter } from '@nestjs/platform-express';
 import { Express, Request, Response } from 'express';
@@ -30,6 +31,19 @@ async function bootstrap(): Promise<any> {
         forbidNonWhitelisted: true,
       }),
     );
+
+    // Swagger documentation
+    const config = new DocumentBuilder()
+      .setTitle('TradingPro Auto Trading API')
+      .setDescription('Auto Trading Backend with MT5, ICT Strategy, and OpenAI Analysis')
+      .setVersion('1.0')
+      .addTag('trading')
+      .addTag('analysis')
+      .addTag('mt5')
+      .build();
+
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('api', app, document);
 
     await app.init();
     cachedApp = app;
