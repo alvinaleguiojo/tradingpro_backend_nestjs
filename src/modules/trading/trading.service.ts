@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -9,10 +9,11 @@ import { Mt5Service, OrderSendResult } from '../mt5/mt5.service';
 import { IctStrategyService } from '../ict-strategy/ict-strategy.service';
 import { OpenAiService, AiTradeRecommendation } from '../openai/openai.service';
 import { MoneyManagementService } from '../money-management/money-management.service';
+import { KillZoneService } from '../ict-strategy/services/kill-zone.service';
 import { IctAnalysisResult, TradeSetup, Candle } from '../ict-strategy/types';
 
 @Injectable()
-export class TradingService {
+export class TradingService implements OnModuleInit {
   private readonly logger = new Logger(TradingService.name);
 
   constructor(
@@ -27,7 +28,28 @@ export class TradingService {
     private ictStrategyService: IctStrategyService,
     private openAiService: OpenAiService,
     private moneyManagementService: MoneyManagementService,
+    private killZoneService: KillZoneService,
   ) {}
+
+  async onModuleInit() {
+    // Sync broker timezone from MT5 on startup
+    await this.syncBrokerTimezone();
+  }
+
+  /**
+   * Sync broker timezone from MT5 server
+   */
+  async syncBrokerTimezone(): Promise<void> {
+    try {
+      const serverTz = await this.mt5Service.getServerTimezone();
+      if (serverTz) {
+        this.killZoneService.setBrokerTimezoneOffset(serverTz.offsetHours, 'mt5');
+        this.logger.log(`Broker timezone synced from MT5: UTC${serverTz.offsetHours >= 0 ? '+' : ''}${serverTz.offsetHours}`);
+      }
+    } catch (error) {
+      this.logger.warn('Could not sync broker timezone from MT5, using config default');
+    }
+  }
 
   /**
    * Log trading event to database

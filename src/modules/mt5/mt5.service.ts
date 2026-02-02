@@ -325,6 +325,59 @@ export class Mt5Service implements OnModuleInit {
     }
   }
 
+  /**
+   * Get broker server timezone offset from MT5
+   * Returns timezone offset in hours (e.g., 2 for UTC+2)
+   */
+  async getServerTimezone(): Promise<{ timezone: string; offsetHours: number } | null> {
+    await this.checkConnection();
+    
+    try {
+      const response = await this.axiosClient.get('/ServerTimezone', {
+        params: { id: this.token },
+      });
+      
+      // Response format: "UTC+2" or similar
+      const timezone = response.data?.toString() || 'UTC+2';
+      
+      // Parse offset from timezone string (e.g., "UTC+2" -> 2, "UTC-5" -> -5)
+      const match = timezone.match(/UTC([+-]?\d+)/i);
+      const offsetHours = match ? parseInt(match[1], 10) : 2;
+      
+      this.logger.log(`MT5 Server Timezone: ${timezone} (UTC${offsetHours >= 0 ? '+' : ''}${offsetHours})`);
+      
+      return { timezone, offsetHours };
+    } catch (error) {
+      this.logger.error('Failed to get server timezone', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get detailed account info including server time
+   */
+  async getAccountDetails(): Promise<{
+    accountNumber: string;
+    name: string;
+    serverName: string;
+    serverTime: string;
+    serverTimezone: string;
+    company: string;
+    currency: string;
+  } | null> {
+    await this.checkConnection();
+    
+    try {
+      const response = await this.axiosClient.get('/AccountDetails', {
+        params: { id: this.token },
+      });
+      return response.data;
+    } catch (error) {
+      this.logger.error('Failed to get account details', error);
+      return null;
+    }
+  }
+
   async getQuote(symbol: string): Promise<Mt5Quote | null> {
     await this.checkConnection();
     
