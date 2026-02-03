@@ -459,13 +459,14 @@ export class AutoTradingService implements OnModuleInit {
   /**
    * Get current status
    */
-  getStatus(): {
+  async getStatus(): Promise<{
     enabled: boolean;
     running: boolean;
     symbol: string;
+    configuredSymbol: string;
     timeframe: string;
     nextRun: string;
-  } {
+  }> {
     const now = new Date();
     const minutes = now.getMinutes();
     const nextQuarter = Math.ceil((minutes + 1) / 15) * 15;

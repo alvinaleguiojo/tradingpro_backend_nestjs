@@ -65,7 +65,7 @@ export class TradingController {
       openTrades,
     ] = await Promise.all([
       // These are fast (in-memory)
-      Promise.resolve(this.autoTradingService.getStatus()),
+      this.autoTradingService.getStatus(),
       Promise.resolve({
         enabled: this.tradingService.isScalpingMode(),
         config: this.scalpingStrategy.getConfig(),
@@ -116,10 +116,10 @@ export class TradingController {
 
   @Get('status')
   @ApiOperation({ summary: 'Get auto trading status' })
-  getStatus() {
+  async getStatus() {
     return {
       success: true,
-      data: this.autoTradingService.getStatus(),
+      data: await this.autoTradingService.getStatus(),
     };
   }
 
