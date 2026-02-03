@@ -833,15 +833,16 @@ export class Mt5Service implements OnModuleInit {
     const orderType = params.type === 'BUY' ? 0 : 1;
 
     try {
+      // Use correct mtapi.io parameter names: stoploss and takeprofit (not sl/tp)
       const response = await this.axiosClient.get('/OrderSend', {
         params: {
           id: this.token,
           symbol: params.symbol,
-          type: orderType,
+          operation: params.type === 'BUY' ? 'Buy' : 'Sell',
           volume: params.volume,
           price: params.price || 0, // 0 for market order
-          sl: params.stopLoss || 0,
-          tp: params.takeProfit || 0,
+          stoploss: params.stopLoss || 0,
+          takeprofit: params.takeProfit || 0,
           comment: params.comment || 'AutoTrading',
         },
       });
@@ -885,12 +886,13 @@ export class Mt5Service implements OnModuleInit {
     await this.checkConnection();
 
     try {
+      // Use correct mtapi.io parameter names: stoploss and takeprofit (not sl/tp)
       const response = await this.axiosClient.get('/OrderModify', {
         params: {
           id: this.token,
           ticket: params.ticket,
-          sl: params.stopLoss,
-          tp: params.takeProfit,
+          stoploss: params.stopLoss,
+          takeprofit: params.takeProfit,
         },
       });
 
