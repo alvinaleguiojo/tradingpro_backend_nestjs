@@ -1173,20 +1173,45 @@ export class Mt5Service implements OnModuleInit {
         const symbols = await this.getSymbolList(pattern);
         
         if (symbols.length > 0) {
-          // Prioritize symbols that look like Gold vs USD
-          const usdSymbol = symbols.find((s: string) => 
-            s.toUpperCase().includes('USD') || 
-            s.toUpperCase().includes('GOLD')
+          // Priority 1: XAUUSDm or XAUUSD (most common for Gold vs USD)
+          const xauusdSymbol = symbols.find((s: string) => 
+            s.toUpperCase().startsWith('XAUUSD')
           );
-          
-          if (usdSymbol) {
-            this.logger.log(`✅ Detected Gold symbol: ${usdSymbol}`);
-            return usdSymbol;
+          if (xauusdSymbol) {
+            this.logger.log(`✅ Detected Gold symbol (XAUUSD*): ${xauusdSymbol}`);
+            return xauusdSymbol;
           }
           
-          // Return first match if no USD-specific one found
-          this.logger.log(`✅ Detected Gold symbol: ${symbols[0]}`);
-          return symbols[0];
+          // Priority 2: Any symbol containing both XAU and USD
+          const xauWithUsd = symbols.find((s: string) => 
+            s.toUpperCase().includes('XAU') && s.toUpperCase().includes('USD')
+          );
+          if (xauWithUsd) {
+            this.logger.log(`✅ Detected Gold symbol (XAU+USD): ${xauWithUsd}`);
+            return xauWithUsd;
+          }
+          
+          // Priority 3: GOLD symbol
+          const goldSymbol = symbols.find((s: string) => 
+            s.toUpperCase().startsWith('GOLD')
+          );
+          if (goldSymbol) {
+            this.logger.log(`✅ Detected Gold symbol (GOLD*): ${goldSymbol}`);
+            return goldSymbol;
+          }
+          
+          // Avoid symbols like XAUJPY, XAUEUR - only use USD pairs
+          const usdOnlySymbol = symbols.find((s: string) => {
+            const upper = s.toUpperCase();
+            return upper.includes('USD') && !upper.includes('JPY') && !upper.includes('EUR') && !upper.includes('GBP') && !upper.includes('AUD');
+          });
+          if (usdOnlySymbol) {
+            this.logger.log(`✅ Detected Gold symbol (USD only): ${usdOnlySymbol}`);
+            return usdOnlySymbol;
+          }
+          
+          // Last resort: skip non-USD symbols entirely
+          this.logger.warn(`⚠️ Found Gold symbols but none are USD-denominated: ${symbols.slice(0, 5).join(', ')}`);
         }
       }
       

@@ -478,6 +478,12 @@ export class TradingService implements OnModuleInit {
       
       if (allOpenOrders.length >= maxPositions) {
         this.logger.log(`Max positions reached for account: ${allOpenOrders.length}/${maxPositions} (limit 1 per account)`);
+        await this.logEvent(
+          TradingEventType.CRON_EXECUTION,
+          `Trade skipped: Max positions reached (${allOpenOrders.length}/${maxPositions})`,
+          { accountId, openPositions: allOpenOrders.length, maxPositions },
+          'info',
+        );
         return null;
       }
 
@@ -485,6 +491,12 @@ export class TradingService implements OnModuleInit {
       const isOpen = await this.mt5Service.isTradeSession(signal.symbol);
       if (!isOpen) {
         this.logger.log(`Market is closed for ${signal.symbol}`);
+        await this.logEvent(
+          TradingEventType.CRON_EXECUTION,
+          `Trade skipped: Market closed for ${signal.symbol}`,
+          { symbol: signal.symbol },
+          'info',
+        );
         return null;
       }
 
