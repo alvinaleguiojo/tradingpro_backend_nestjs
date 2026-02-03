@@ -141,7 +141,7 @@ export class AutoTradingService implements OnModuleInit {
    * Manually trigger trading cycle
    * IMPORTANT: Must await the cycle for serverless environments (Vercel)
    */
-  async manualTrigger(): Promise<{ success: boolean; message: string; signal?: any; trade?: any }> {
+  async manualTrigger(): Promise<{ success: boolean; message: string; signal?: any; trade?: any; analysis?: any }> {
     if (this.isRunning) {
       return { success: false, message: 'Trading cycle already running' };
     }
@@ -154,7 +154,7 @@ export class AutoTradingService implements OnModuleInit {
   /**
    * Run trading cycle and return the result (for serverless environments)
    */
-  async runTradingCycleWithResult(): Promise<{ success: boolean; message: string; signal?: any; trade?: any }> {
+  async runTradingCycleWithResult(): Promise<{ success: boolean; message: string; signal?: any; trade?: any; analysis?: any }> {
     if (this.isRunning) {
       return { success: false, message: 'Trading cycle already running' };
     }
@@ -183,7 +183,25 @@ export class AutoTradingService implements OnModuleInit {
 
       if (!signal) {
         this.logger.log('No signal generated');
-        return { success: true, message: 'No trading signal generated', signal: null };
+        return { 
+          success: true, 
+          message: 'No trading signal generated - no valid setup found', 
+          signal: null,
+          analysis: {
+            symbol,
+            timeframe,
+            mode: this.scalpingMode ? 'SCALPING' : 'STANDARD',
+            result: 'No pattern detected with sufficient confidence',
+          },
+        };
+      }
+
+      // Parse AI analysis for scoring details
+      let aiAnalysisData: any = {};
+      try {
+        aiAnalysisData = signal.aiAnalysis ? JSON.parse(signal.aiAnalysis) : {};
+      } catch (e) {
+        aiAnalysisData = { raw: signal.aiAnalysis };
       }
 
       this.logger.log(`📊 Signal: ${signal.signalType} | Confidence: ${signal.confidence}% | Strength: ${signal.strength}`);
@@ -213,14 +231,28 @@ export class AutoTradingService implements OnModuleInit {
 
       return {
         success: true,
-        message: trade ? `Trade executed: ${trade.direction} @ ${trade.entryPrice}` : `Signal: ${signal.signalType} (${signal.confidence}% confidence)`,
+        message: trade 
+          ? `Trade executed: ${trade.direction} @ ${trade.entryPrice}` 
+          : `Signal: ${signal.signalType} (${signal.confidence}% confidence)`,
         signal: {
           id: signal.id,
           type: signal.signalType,
+          strength: signal.strength,
           confidence: signal.confidence,
           entryPrice: signal.entryPrice,
           stopLoss: signal.stopLoss,
           takeProfit: signal.takeProfit,
+        },
+        analysis: {
+          mode: this.scalpingMode ? 'SCALPING' : 'STANDARD',
+          reasoning: signal.reasoning,
+          scoring: {
+            confidence: signal.confidence,
+            minRequired: minConfidenceForTrade,
+            passed: signal.confidence >= minConfidenceForTrade,
+          },
+          details: aiAnalysisData,
+          ictAnalysis: signal.ictAnalysis,
         },
         trade: trade ? {
           id: trade.id,
