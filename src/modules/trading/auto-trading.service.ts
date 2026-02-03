@@ -226,7 +226,7 @@ export class AutoTradingService implements OnModuleInit {
       this.logger.log(`📊 MASTER SIGNAL: ${masterSignal.signalType} | Confidence: ${masterSignal.confidence}% | Strength: ${masterSignal.strength}`);
 
       // ========== EXECUTE SAME SIGNAL ON ALL ACCOUNTS ==========
-      const minConfidence = this.scalpingMode ? 35 : 40;
+      const minConfidence = this.scalpingMode ? 20 : 30;
       
       if (masterSignal.signalType === 'HOLD' || masterSignal.confidence < minConfidence) {
         this.logger.log(`⏸️ Signal not actionable: ${masterSignal.signalType} with ${masterSignal.confidence}% confidence`);
@@ -389,7 +389,7 @@ export class AutoTradingService implements OnModuleInit {
       };
 
       // Check if signal is actionable
-      const minConfidenceForTrade = this.scalpingMode ? 35 : 40;
+      const minConfidenceForTrade = this.scalpingMode ? 20 : 30;
       if (masterSignal.signalType === 'HOLD' || masterSignal.confidence < minConfidenceForTrade) {
         this.isRunning = false;
         return {

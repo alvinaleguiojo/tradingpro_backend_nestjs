@@ -436,8 +436,8 @@ export class TradingService implements OnModuleInit {
         return null;
       }
 
-      // Minimum confidence threshold for scalping mode (35% vs 40%)
-      const minConfidence = this.scalpingMode ? 35 : 40;
+      // Minimum confidence threshold for scalping mode (20% vs 30%)
+      const minConfidence = this.scalpingMode ? 20 : 30;
       if (signal.confidence < minConfidence) {
         this.logger.log(`Signal confidence too low: ${signal.confidence}% (min: ${minConfidence}%)`);
         return null;
