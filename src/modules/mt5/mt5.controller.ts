@@ -355,6 +355,8 @@ export class Mt5Controller {
             type: t.orderType,
             volume: t.lots,
             openPrice: t.openPrice,
+            stopLoss: t.stopLoss,
+            takeProfit: t.takeProfit,
             profit: t.profit,
             openTime: t.openTime,
           })),
