@@ -457,19 +457,21 @@ export class TradingService implements OnModuleInit {
       const mmStatus = await this.moneyManagementService.getMoneyManagementStatus(accountId);
       
       // Check if we should stop trading (daily target reached or loss limit)
-      if (mmStatus.shouldStopTrading.stop) {
-        this.logger.log(`Trading stopped: ${mmStatus.shouldStopTrading.reason}`);
-        await this.logEvent(
-          TradingEventType.CRON_EXECUTION,
-          `Trade skipped: ${mmStatus.shouldStopTrading.reason}`,
-          { 
-            signalId: signal.id,
-            dailyProfit: mmStatus.accountState.dailyProfit,
-            dailyTarget: mmStatus.currentLevel.dailyTarget,
-          },
-        );
-        return null;
-      }
+      // DISABLED FOR TESTING - uncomment to re-enable daily target limits
+      // if (mmStatus.shouldStopTrading.stop) {
+      //   this.logger.log(`Trading stopped: ${mmStatus.shouldStopTrading.reason}`);
+      //   await this.logEvent(
+      //     TradingEventType.CRON_EXECUTION,
+      //     `Trade skipped: ${mmStatus.shouldStopTrading.reason}`,
+      //     { 
+      //       signalId: signal.id,
+      //       dailyProfit: mmStatus.accountState.dailyProfit,
+      //       dailyTarget: mmStatus.currentLevel.dailyTarget,
+      //     },
+      //   );
+      //   return null;
+      // }
+      this.logger.log(`Daily target check DISABLED for testing - would have stopped: ${mmStatus.shouldStopTrading.stop ? 'YES' : 'NO'}`);
 
       // Get dynamic lot size based on current balance level
       const lotSize = mmStatus.recommendedLotSize;
