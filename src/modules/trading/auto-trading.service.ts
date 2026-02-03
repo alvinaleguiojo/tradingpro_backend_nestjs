@@ -59,41 +59,40 @@ export class AutoTradingService implements OnModuleInit {
   }
 
   /**
-   * Sync trades with MT5 every 2 minutes (faster for scalping)
+   * Sync trades with MT5 every 2 minutes for ALL accounts
    */
   @Cron('0 */2 * * * *')
   async handleSyncCron() {
     try {
-      await this.ensureMt5Connection();
-      await this.tradingService.syncTradesWithMt5();
+      const accounts = await this.getAllActiveAccounts();
+      
+      for (const account of accounts) {
+        try {
+          await this.ensureMt5ConnectionForAccount(account);
+          await this.tradingService.syncTradesWithMt5();
+          this.logger.log(`✅ Synced trades for account ${account.user}`);
+        } catch (error) {
+          this.logger.error(`Failed to sync account ${account.user}: ${error.message}`);
+        }
+      }
     } catch (error) {
       this.logger.error('Trade sync failed', error);
     }
   }
 
   /**
-   * Ensure MT5 connection is active before trading operations
+   * Ensure MT5 connection is active for a specific account
    * Loads credentials from database, connects, and updates token
    */
-  private async ensureMt5Connection(): Promise<void> {
+  private async ensureMt5ConnectionForAccount(connection: Mt5Connection): Promise<void> {
     try {
-      // Step 1: Find the most recent active connection from database
-      const connection = await this.mt5ConnectionRepo.findOne({
-        where: {},
-        order: { updatedAt: 'DESC' },
-      });
-
-      if (!connection) {
-        throw new Error('No MT5 credentials found in database. Please login from the app first.');
-      }
-
       if (!connection.user || !connection.password || !connection.host) {
         throw new Error(`Incomplete MT5 credentials for account ${connection.user}`);
       }
 
       this.logger.log(`Loading MT5 credentials for account ${connection.user} from database`);
 
-      // Step 2: Set credentials in MT5 service
+      // Set credentials in MT5 service
       await this.mt5Service.setCredentials(
         connection.user,
         connection.password,
@@ -101,7 +100,7 @@ export class AutoTradingService implements OnModuleInit {
         connection.port?.toString() || '443',
       );
 
-      // Step 3: Check if existing token is still valid
+      // Check if existing token is still valid
       const tokenAge = connection.lastConnectedAt 
         ? Date.now() - new Date(connection.lastConnectedAt).getTime()
         : Infinity;
@@ -110,19 +109,19 @@ export class AutoTradingService implements OnModuleInit {
 
       if (connection.token && !tokenExpired) {
         // Try to use existing token
-        this.logger.log(`Using cached token (age: ${Math.round(tokenAge / 1000)}s)`);
+        this.logger.log(`Using cached token for ${connection.user} (age: ${Math.round(tokenAge / 1000)}s)`);
         const isValid = await this.mt5Service.checkConnection();
         if (isValid) {
-          this.logger.log('✅ MT5 connection restored from cached token');
+          this.logger.log(`✅ MT5 connection restored for account ${connection.user}`);
           return;
         }
       }
 
-      // Step 4: Token expired or invalid, reconnect
-      this.logger.log('Token expired or invalid, reconnecting to MT5...');
+      // Token expired or invalid, reconnect
+      this.logger.log(`Token expired or invalid for ${connection.user}, reconnecting...`);
       const newToken = await this.mt5Service.connect();
 
-      // Step 5: Update token in database
+      // Update token in database
       connection.token = newToken;
       connection.isConnected = true;
       connection.lastConnectedAt = new Date();
@@ -131,13 +130,41 @@ export class AutoTradingService implements OnModuleInit {
       this.logger.log(`✅ MT5 reconnected and token updated for account ${connection.user}`);
 
     } catch (error) {
-      this.logger.error(`Failed to ensure MT5 connection: ${error.message}`);
+      this.logger.error(`Failed to connect account ${connection.user}: ${error.message}`);
       throw error;
     }
   }
 
   /**
-   * Run the complete trading cycle
+   * Legacy method for backward compatibility - uses most recent account
+   */
+  private async ensureMt5Connection(): Promise<void> {
+    const connection = await this.mt5ConnectionRepo.findOne({
+      where: {},
+      order: { updatedAt: 'DESC' },
+    });
+
+    if (!connection) {
+      throw new Error('No MT5 credentials found in database. Please login from the app first.');
+    }
+
+    await this.ensureMt5ConnectionForAccount(connection);
+  }
+
+  /**
+   * Get all active MT5 accounts from database
+   */
+  private async getAllActiveAccounts(): Promise<Mt5Connection[]> {
+    const connections = await this.mt5ConnectionRepo.find({
+      order: { updatedAt: 'DESC' },
+    });
+    
+    // Filter out connections with incomplete credentials
+    return connections.filter(c => c.user && c.password && c.host);
+  }
+
+  /**
+   * Run the complete trading cycle for ALL accounts
    */
   async runTradingCycle(): Promise<void> {
     if (this.isRunning) {
@@ -154,50 +181,68 @@ export class AutoTradingService implements OnModuleInit {
     const startTime = Date.now();
 
     try {
-      // Step 0: Ensure MT5 connection is ready
-      await this.ensureMt5Connection();
+      // Get all active accounts
+      const accounts = await this.getAllActiveAccounts();
+      
+      if (accounts.length === 0) {
+        this.logger.warn('No MT5 accounts found in database');
+        return;
+      }
+
+      this.logger.log(`🔄 Running trading cycle for ${accounts.length} account(s)`);
 
       const symbol = this.configService.get('TRADING_SYMBOL', 'XAUUSDm');
       const timeframe = this.configService.get('TRADING_TIMEFRAME', 'M15');
 
-      await this.tradingService.logEvent(
-        TradingEventType.CRON_EXECUTION,
-        `Starting trading cycle for ${symbol} ${timeframe}`,
-        { symbol, timeframe, timestamp: new Date().toISOString() },
-      );
+      // Run trading cycle for each account
+      for (const account of accounts) {
+        try {
+          this.logger.log(`\n📊 Processing account: ${account.user}`);
+          
+          // Connect to this account
+          await this.ensureMt5ConnectionForAccount(account);
 
-      this.logger.log(`🔄 Running trading cycle for ${symbol} on ${timeframe} timeframe`);
+          await this.tradingService.logEvent(
+            TradingEventType.CRON_EXECUTION,
+            `Starting trading cycle for ${symbol} ${timeframe} - Account: ${account.user}`,
+            { symbol, timeframe, accountId: account.user, timestamp: new Date().toISOString() },
+          );
 
-      // Step 1: Generate trading signal
-      const signal = await this.tradingService.analyzeAndGenerateSignal(symbol, timeframe);
+          // Generate trading signal
+          const signal = await this.tradingService.analyzeAndGenerateSignal(symbol, timeframe);
 
-      if (!signal) {
-        this.logger.log('No signal generated');
-        return;
-      }
+          if (!signal) {
+            this.logger.log(`No signal for account ${account.user}`);
+            continue;
+          }
 
-      this.logger.log(`📊 Signal: ${signal.signalType} | Confidence: ${signal.confidence}% | Strength: ${signal.strength}`);
+          this.logger.log(`📊 [${account.user}] Signal: ${signal.signalType} | Confidence: ${signal.confidence}% | Strength: ${signal.strength}`);
 
-      // Step 2: Execute trade if signal is actionable
-      // Use lower confidence threshold for scalping mode (20%) vs standard mode (30%)
-      const minConfidence = this.scalpingMode ? 20 : 30;
-      if (signal.signalType !== 'HOLD' && signal.confidence >= minConfidence) {
-        const trade = await this.tradingService.executeTrade(signal);
-        
-        if (trade) {
-          this.logger.log(`✅ Trade executed: ${trade.direction} ${trade.lotSize} ${trade.symbol} @ ${trade.entryPrice}`);
-        } else {
-          this.logger.log('⏸️ Trade not executed (conditions not met)');
+          // Execute trade if signal is actionable
+          const minConfidence = this.scalpingMode ? 20 : 30;
+          if (signal.signalType !== 'HOLD' && signal.confidence >= minConfidence) {
+            const trade = await this.tradingService.executeTrade(signal);
+            
+            if (trade) {
+              this.logger.log(`✅ [${account.user}] Trade executed: ${trade.direction} ${trade.lotSize} ${trade.symbol} @ ${trade.entryPrice}`);
+            } else {
+              this.logger.log(`⏸️ [${account.user}] Trade not executed (conditions not met)`);
+            }
+          } else {
+            this.logger.log(`⏸️ [${account.user}] Signal not actionable: ${signal.signalType} with ${signal.confidence}% confidence`);
+          }
+
+        } catch (accountError) {
+          this.logger.error(`Failed to process account ${account.user}: ${accountError.message}`);
+          // Continue with next account
         }
-      } else {
-        this.logger.log(`⏸️ Signal not actionable: ${signal.signalType} with ${signal.confidence}% confidence (min: ${minConfidence}%)`);
       }
 
       const duration = Date.now() - startTime;
       await this.tradingService.logEvent(
         TradingEventType.CRON_EXECUTION,
-        `Trading cycle completed in ${duration}ms`,
-        { duration, signalId: signal?.id },
+        `Trading cycle completed for ${accounts.length} accounts in ${duration}ms`,
+        { duration, accountCount: accounts.length },
       );
 
     } catch (error) {
@@ -214,10 +259,10 @@ export class AutoTradingService implements OnModuleInit {
   }
 
   /**
-   * Manually trigger trading cycle
+   * Manually trigger trading cycle for ALL accounts
    * IMPORTANT: Must await the cycle for serverless environments (Vercel)
    */
-  async manualTrigger(): Promise<{ success: boolean; message: string; signal?: any; trade?: any; analysis?: any }> {
+  async manualTrigger(): Promise<{ success: boolean; message: string; accounts?: any[] }> {
     if (this.isRunning) {
       return { success: false, message: 'Trading cycle already running' };
     }
@@ -228,9 +273,9 @@ export class AutoTradingService implements OnModuleInit {
   }
 
   /**
-   * Run trading cycle and return the result (for serverless environments)
+   * Run trading cycle for ALL accounts and return results (for serverless environments)
    */
-  async runTradingCycleWithResult(): Promise<{ success: boolean; message: string; signal?: any; trade?: any; analysis?: any }> {
+  async runTradingCycleWithResult(): Promise<{ success: boolean; message: string; accounts?: any[] }> {
     if (this.isRunning) {
       return { success: false, message: 'Trading cycle already running' };
     }
@@ -241,115 +286,122 @@ export class AutoTradingService implements OnModuleInit {
 
     this.isRunning = true;
     const startTime = Date.now();
+    const accountResults: any[] = [];
 
     try {
-      // Step 0: Ensure MT5 connection is ready
-      await this.ensureMt5Connection();
+      // Get all active accounts
+      const accounts = await this.getAllActiveAccounts();
+      
+      if (accounts.length === 0) {
+        this.isRunning = false;
+        return { success: false, message: 'No MT5 accounts found in database' };
+      }
+
+      this.logger.log(`🔄 Running trading cycle for ${accounts.length} account(s)`);
 
       const symbol = this.configService.get('TRADING_SYMBOL', 'XAUUSDm');
       const timeframe = this.configService.get('TRADING_TIMEFRAME', 'M15');
 
-      await this.tradingService.logEvent(
-        TradingEventType.CRON_EXECUTION,
-        `Starting trading cycle for ${symbol} ${timeframe}`,
-        { symbol, timeframe, timestamp: new Date().toISOString() },
-      );
-
-      this.logger.log(`🔄 Running trading cycle for ${symbol} on ${timeframe} timeframe`);
-
-      // Step 1: Generate trading signal
-      const signal = await this.tradingService.analyzeAndGenerateSignal(symbol, timeframe);
-
-      if (!signal) {
-        this.logger.log('No signal generated');
-        return { 
-          success: true, 
-          message: 'No trading signal generated - no valid setup found', 
+      // Process each account
+      for (const account of accounts) {
+        const accountResult: any = {
+          accountId: account.user,
+          success: false,
           signal: null,
-          analysis: {
-            symbol,
-            timeframe,
-            mode: this.scalpingMode ? 'SCALPING' : 'STANDARD',
-            result: 'No pattern detected with sufficient confidence',
-          },
+          trade: null,
+          error: null,
         };
-      }
 
-      // Parse AI analysis for scoring details
-      let aiAnalysisData: any = {};
-      try {
-        aiAnalysisData = signal.aiAnalysis ? JSON.parse(signal.aiAnalysis) : {};
-      } catch (e) {
-        aiAnalysisData = { raw: signal.aiAnalysis };
-      }
+        try {
+          this.logger.log(`\n📊 Processing account: ${account.user}`);
+          
+          // Connect to this account
+          await this.ensureMt5ConnectionForAccount(account);
 
-      this.logger.log(`📊 Signal: ${signal.signalType} | Confidence: ${signal.confidence}% | Strength: ${signal.strength}`);
+          await this.tradingService.logEvent(
+            TradingEventType.CRON_EXECUTION,
+            `Trading cycle for ${symbol} - Account: ${account.user}`,
+            { symbol, timeframe, accountId: account.user },
+          );
 
-      // Step 2: Execute trade if signal is actionable
-      // Use lower confidence threshold for scalping mode (20%) vs standard mode (30%)
-      const minConfidenceForTrade = this.scalpingMode ? 20 : 30;
-      let trade: Trade | null = null;
-      if (signal.signalType !== 'HOLD' && signal.confidence >= minConfidenceForTrade) {
-        trade = await this.tradingService.executeTrade(signal);
-        
-        if (trade) {
-          this.logger.log(`✅ Trade executed: ${trade.direction} ${trade.lotSize} ${trade.symbol} @ ${trade.entryPrice}`);
-        } else {
-          this.logger.log('⏸️ Trade not executed (conditions not met)');
+          // Generate trading signal
+          const signal = await this.tradingService.analyzeAndGenerateSignal(symbol, timeframe);
+
+          if (!signal) {
+            this.logger.log(`No signal for account ${account.user}`);
+            accountResult.success = true;
+            accountResult.message = 'No trading signal - no valid setup found';
+            accountResults.push(accountResult);
+            continue;
+          }
+
+          this.logger.log(`📊 [${account.user}] Signal: ${signal.signalType} | Confidence: ${signal.confidence}%`);
+
+          accountResult.signal = {
+            id: signal.id,
+            type: signal.signalType,
+            strength: signal.strength,
+            confidence: signal.confidence,
+            entryPrice: signal.entryPrice,
+            stopLoss: signal.stopLoss,
+            takeProfit: signal.takeProfit,
+          };
+
+          // Execute trade if signal is actionable
+          const minConfidenceForTrade = this.scalpingMode ? 20 : 30;
+          let trade: Trade | null = null;
+          
+          if (signal.signalType !== 'HOLD' && signal.confidence >= minConfidenceForTrade) {
+            trade = await this.tradingService.executeTrade(signal);
+            
+            if (trade) {
+              this.logger.log(`✅ [${account.user}] Trade executed: ${trade.direction} @ ${trade.entryPrice}`);
+              accountResult.trade = {
+                id: trade.id,
+                direction: trade.direction,
+                entryPrice: trade.entryPrice,
+                lotSize: trade.lotSize,
+              };
+            }
+          }
+
+          accountResult.success = true;
+          accountResult.message = trade 
+            ? `Trade executed: ${trade.direction} @ ${trade.entryPrice}` 
+            : `Signal: ${signal.signalType} (${signal.confidence}% confidence)`;
+
+        } catch (accountError) {
+          this.logger.error(`Failed to process account ${account.user}: ${accountError.message}`);
+          accountResult.success = false;
+          accountResult.error = accountError.message;
         }
-      } else {
-        this.logger.log(`⏸️ Signal not actionable: ${signal.signalType} with ${signal.confidence}% confidence (min: ${minConfidenceForTrade}%)`);
+
+        accountResults.push(accountResult);
       }
 
       const duration = Date.now() - startTime;
+      const tradesExecuted = accountResults.filter(r => r.trade).length;
+      
       await this.tradingService.logEvent(
         TradingEventType.CRON_EXECUTION,
-        `Trading cycle completed in ${duration}ms`,
-        { duration, signalId: signal?.id, tradeId: trade?.id },
+        `Trading cycle completed for ${accounts.length} accounts in ${duration}ms. Trades: ${tradesExecuted}`,
+        { duration, accountCount: accounts.length, tradesExecuted },
       );
 
       return {
         success: true,
-        message: trade 
-          ? `Trade executed: ${trade.direction} @ ${trade.entryPrice}` 
-          : `Signal: ${signal.signalType} (${signal.confidence}% confidence)`,
-        signal: {
-          id: signal.id,
-          type: signal.signalType,
-          strength: signal.strength,
-          confidence: signal.confidence,
-          entryPrice: signal.entryPrice,
-          stopLoss: signal.stopLoss,
-          takeProfit: signal.takeProfit,
-        },
-        analysis: {
-          mode: this.scalpingMode ? 'SCALPING' : 'STANDARD',
-          reasoning: signal.reasoning,
-          scoring: {
-            confidence: signal.confidence,
-            minRequired: minConfidenceForTrade,
-            passed: signal.confidence >= minConfidenceForTrade,
-          },
-          details: aiAnalysisData,
-          ictAnalysis: signal.ictAnalysis,
-        },
-        trade: trade ? {
-          id: trade.id,
-          direction: trade.direction,
-          entryPrice: trade.entryPrice,
-          lotSize: trade.lotSize,
-        } : null,
+        message: `Processed ${accounts.length} account(s), executed ${tradesExecuted} trade(s)`,
+        accounts: accountResults,
       };
 
     } catch (error) {
       this.logger.error('Trading cycle failed', error);
-      await this.tradingService.logEvent(
-        TradingEventType.ERROR,
-        `Trading cycle error: ${error.message}`,
-        { error: error.message, stack: error.stack },
-        'error',
-      );
-      return { success: false, message: `Trading cycle failed: ${error.message}` };
+      return {
+        success: false,
+        message: `Trading cycle error: ${error.message}`,
+        accounts: accountResults,
+      };
+
     } finally {
       this.isRunning = false;
     }
