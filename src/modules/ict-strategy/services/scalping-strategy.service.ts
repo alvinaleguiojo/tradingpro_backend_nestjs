@@ -169,10 +169,11 @@ export class ScalpingStrategyService {
     }
 
     // Calculate tight scalping levels
-    // For XAU/USD (Gold) with standard brokers:
-    // 1 pip = $0.10 price movement for 5-digit pricing (e.g., 4818.45)
-    // So 50 pips = $5 SL, 80 pips = $8 TP in price movement
-    const pipValue = 0.10; // For XAU/USD with 5-digit pricing
+    // For XAU/USD (Gold) - broker requires minimum 1000 points distance for SL/TP
+    // With 3-digit pricing (e.g., 4916.606), we need larger distances
+    // 1 pip for Gold = 0.10 price, but broker limit requires ~1-2 dollar distance
+    // Setting pip value to 0.20 gives us: 50 pips * 0.20 = $10 SL, 80 pips * 0.20 = $16 TP
+    const pipValue = 0.20; // Increased for Gold to meet broker minimum SL/TP distance
     
     let stopLoss: number;
     let takeProfit: number;
