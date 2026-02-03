@@ -472,6 +472,10 @@ export class Mt5Service implements OnModuleInit {
   ): Promise<Mt5Bar[]> {
     await this.checkConnection();
     
+    // Debug: log token info
+    const tokenPreview = this.token ? `${this.token.substring(0, 8)}...` : 'null';
+    this.logger.log(`getPriceHistory called with token: ${tokenPreview} for ${symbol} ${timeframe}`);
+    
     try {
       // Map timeframe to MT5 format
       const tfMap: Record<string, number> = {
@@ -498,6 +502,8 @@ export class Mt5Service implements OnModuleInit {
       const from = fromDate.toISOString().split('T')[0]; // YYYY-MM-DD
       const to = now.toISOString().split('T')[0];
 
+      this.logger.log(`Requesting /PriceHistory: symbol=${symbol}, tf=${tf}, from=${from}, to=${to}`);
+      
       try {
         const response = await this.axiosClient.get('/PriceHistory', {
           params: { 
@@ -508,6 +514,18 @@ export class Mt5Service implements OnModuleInit {
             to,
           },
         });
+        
+        // Log response details for debugging
+        const responseType = typeof response.data;
+        const isArray = Array.isArray(response.data);
+        this.logger.log(`PriceHistory response: type=${responseType}, isArray=${isArray}, length=${isArray ? response.data.length : 'N/A'}`);
+        
+        // Check if API returned an error object
+        if (response.data?.error) {
+          this.logger.error(`PriceHistory API error: ${response.data.error}`);
+          throw new Error(response.data.error);
+        }
+        
         rawBars = Array.isArray(response.data) ? response.data : [];
         this.logger.log(`PriceHistory (${from} to ${to}) returned ${rawBars.length} candles for ${symbol} ${timeframe}`);
       } catch (e) {
@@ -522,6 +540,13 @@ export class Mt5Service implements OnModuleInit {
               timeframe: tf,
             },
           });
+          
+          // Check if API returned an error object
+          if (todayResponse.data?.error) {
+            this.logger.error(`PriceHistoryToday API error: ${todayResponse.data.error}`);
+            throw new Error(todayResponse.data.error);
+          }
+          
           rawBars = Array.isArray(todayResponse.data) ? todayResponse.data : [];
           this.logger.log(`PriceHistoryToday returned ${rawBars.length} candles for ${symbol} ${timeframe}`);
         } catch (e2) {
