@@ -171,6 +171,150 @@ export class Mt5Service implements OnModuleInit {
   }
 
   /**
+   * Get all MT5 accounts stored in database
+   */
+  async getAllAccounts(): Promise<any[]> {
+    try {
+      const connections = await this.mt5ConnectionRepo.find({
+        order: { updatedAt: 'DESC' },
+      });
+      
+      return connections.map(conn => ({
+        accountId: conn.accountId,
+        user: conn.user,
+        host: conn.host,
+        port: conn.port,
+        isConnected: conn.isConnected,
+        hasToken: !!conn.token && this.isValidToken(conn.token),
+        balance: conn.balance,
+        equity: conn.equity,
+        currency: conn.currency,
+        lastConnectedAt: conn.lastConnectedAt,
+        updatedAt: conn.updatedAt,
+      }));
+    } catch (error) {
+      this.logger.error('Error getting all accounts:', error.message);
+      return [];
+    }
+  }
+
+  /**
+   * Get open trades for a specific account by connecting temporarily
+   */
+  async getTradesForAccount(user: string, password: string, host: string, port: string = '443'): Promise<{
+    success: boolean;
+    account: string;
+    trades: any[];
+    balance?: number;
+    equity?: number;
+    error?: string;
+  }> {
+    try {
+      // Connect to this specific account
+      const response = await this.axiosClient.get('/Connect', {
+        params: { user, password, host, port },
+        timeout: this.CONNECTION_TIMEOUT,
+      });
+
+      if (!response.data || !this.isValidToken(response.data)) {
+        return {
+          success: false,
+          account: user,
+          trades: [],
+          error: 'Failed to connect - invalid token received',
+        };
+      }
+
+      const token = response.data;
+
+      // Get account summary
+      let balance = 0;
+      let equity = 0;
+      try {
+        const summaryResponse = await this.axiosClient.get('/AccountSummary', {
+          params: { id: token },
+          timeout: this.REQUEST_TIMEOUT,
+        });
+        balance = summaryResponse.data?.balance || 0;
+        equity = summaryResponse.data?.equity || 0;
+      } catch (e) {
+        // Continue even if summary fails
+      }
+
+      // Get open orders
+      const ordersResponse = await this.axiosClient.get('/OpenedOrders', {
+        params: { id: token },
+        timeout: this.REQUEST_TIMEOUT,
+      });
+
+      const trades = Array.isArray(ordersResponse.data) ? ordersResponse.data : [];
+
+      // Disconnect
+      try {
+        await this.axiosClient.get('/Disconnect', { params: { id: token } });
+      } catch (e) {
+        // Ignore disconnect errors
+      }
+
+      return {
+        success: true,
+        account: user,
+        trades,
+        balance,
+        equity,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        account: user,
+        trades: [],
+        error: error.message,
+      };
+    }
+  }
+
+  /**
+   * Get open trades across ALL accounts in database
+   */
+  async getAllAccountsTrades(): Promise<{
+    totalAccounts: number;
+    totalOpenTrades: number;
+    accounts: any[];
+  }> {
+    const connections = await this.mt5ConnectionRepo.find();
+    const results: any[] = [];
+    let totalOpenTrades = 0;
+
+    for (const conn of connections) {
+      if (!conn.user || !conn.password || !conn.host) {
+        results.push({
+          account: conn.user || conn.accountId,
+          success: false,
+          error: 'Missing credentials',
+          trades: [],
+        });
+        continue;
+      }
+
+      const accountResult = await this.getTradesForAccount(
+        conn.user,
+        conn.password,
+        conn.host,
+        conn.port?.toString() || '443',
+      );
+
+      totalOpenTrades += accountResult.trades.length;
+      results.push(accountResult);
+    }
+
+    return {
+      totalAccounts: connections.length,
+      totalOpenTrades,
+      accounts: results,
+    };
+  }
+
+  /**
    * Clear any invalid tokens from database
    * Use this when the stored token is corrupted (e.g., JSON error object instead of UUID)
    */

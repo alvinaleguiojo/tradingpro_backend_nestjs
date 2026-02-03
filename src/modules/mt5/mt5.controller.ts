@@ -318,4 +318,53 @@ export class Mt5Controller {
       };
     }
   }
+
+  @Get('all-accounts')
+  @ApiOperation({ summary: 'Get list of all MT5 accounts in database' })
+  async getAllAccounts() {
+    const accounts = await this.mt5Service.getAllAccounts();
+    return {
+      success: true,
+      count: accounts.length,
+      accounts,
+    };
+  }
+
+  @Get('all-trades')
+  @ApiOperation({ summary: 'Get open trades across ALL MT5 accounts' })
+  async getAllAccountsTrades() {
+    try {
+      const result = await this.mt5Service.getAllAccountsTrades();
+      return {
+        success: true,
+        timestamp: new Date().toISOString(),
+        summary: {
+          totalAccounts: result.totalAccounts,
+          totalOpenTrades: result.totalOpenTrades,
+        },
+        accounts: result.accounts.map(acc => ({
+          account: acc.account,
+          success: acc.success,
+          balance: acc.balance,
+          equity: acc.equity,
+          openTrades: acc.trades.length,
+          error: acc.error,
+          trades: acc.trades.map((t: any) => ({
+            ticket: t.ticket,
+            symbol: t.symbol,
+            type: t.orderType,
+            volume: t.lots,
+            openPrice: t.openPrice,
+            profit: t.profit,
+            openTime: t.openTime,
+          })),
+        })),
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
 }
