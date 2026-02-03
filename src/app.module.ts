@@ -81,9 +81,9 @@ import { HealthController } from './health.controller';
             prepare: false,
           },
           
-          // TypeORM retry settings - longer delays to let pool clear
-          retryAttempts: 10, // More retries
-          retryDelay: 2000, // 2 seconds between retries (allows pool to clear)
+          // TypeORM retry settings - faster fail for serverless
+          retryAttempts: 3, // Fewer retries to fail fast
+          retryDelay: 1000, // 1 second between retries
           
           // Minimal pool size
           poolSize: 1,

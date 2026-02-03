@@ -72,6 +72,12 @@ export class Mt5Service implements OnModuleInit {
     port: string;
   } | null = null;
 
+  // Connection timeout reduced for Vercel serverless compatibility
+  private readonly CONNECTION_TIMEOUT = 10000; // 10 seconds for connection
+  private readonly REQUEST_TIMEOUT = 15000; // 15 seconds for data requests
+  private lastTokenValidation: number = 0;
+  private readonly TOKEN_VALIDATION_INTERVAL = 60000; // Revalidate token every 60s
+
   constructor(
     private configService: ConfigService,
     @InjectRepository(Mt5Connection)
@@ -82,7 +88,7 @@ export class Mt5Service implements OnModuleInit {
     this.baseUrl = this.configService.get('MT5_API_BASE_URL', 'https://mt5.mtapi.io');
     this.axiosClient = axios.create({
       baseURL: this.baseUrl,
-      timeout: 30000,
+      timeout: this.REQUEST_TIMEOUT,
     });
   }
 
@@ -218,6 +224,7 @@ export class Mt5Service implements OnModuleInit {
     try {
       const response = await this.axiosClient.get('/Connect', {
         params: { user, password, host, port },
+        timeout: this.CONNECTION_TIMEOUT, // Faster timeout for connection
       });
 
       if (response.data && !response.data.error) {
@@ -306,27 +313,74 @@ export class Mt5Service implements OnModuleInit {
   }
 
   async checkConnection(): Promise<boolean> {
+    // If we have a token and it was validated recently, skip validation
+    const now = Date.now();
+    if (this.token && (now - this.lastTokenValidation) < this.TOKEN_VALIDATION_INTERVAL) {
+      return true;
+    }
+
     if (!this.token) {
-      // Try to load from DB first (serverless persistence)
+      // Try to load token from DB first (for serverless cold starts)
+      await this.loadTokenFromDb();
+    }
+
+    if (!this.token) {
+      // No token in DB, need to connect
       await this.loadCredentialsFromDb();
       await this.connect();
       return !!this.token;
     }
 
     try {
+      // Quick validation with short timeout
       const response = await this.axiosClient.get('/ConnectionStatus', {
         params: { id: this.token },
+        timeout: 5000, // 5 second timeout for status check
       });
       
       if (response.data?.connected === false) {
+        this.token = null;
         await this.connect();
+      } else {
+        this.lastTokenValidation = now;
       }
       
       return true;
     } catch (error) {
       this.logger.warn('Connection check failed, attempting reconnect');
+      this.token = null;
       await this.connect();
       return !!this.token;
+    }
+  }
+
+  /**
+   * Load token from database (for serverless cold starts)
+   * Avoids full reconnection if token is still valid
+   */
+  private async loadTokenFromDb(): Promise<void> {
+    try {
+      const connection = await this.mt5ConnectionRepo.findOne({
+        where: { isConnected: true },
+        order: { lastConnectedAt: 'DESC' },
+      });
+      
+      if (connection?.token) {
+        // Check if token is less than 30 minutes old
+        const tokenAge = Date.now() - connection.lastConnectedAt.getTime();
+        if (tokenAge < 30 * 60 * 1000) { // 30 minutes
+          this.token = connection.token;
+          this.dynamicCredentials = {
+            user: connection.user,
+            password: connection.password || '',
+            host: connection.host,
+            port: connection.port?.toString() || '443',
+          };
+          this.logger.log(`Restored MT5 token from database (age: ${Math.round(tokenAge/1000)}s)`);
+        }
+      }
+    } catch (error) {
+      this.logger.warn('Could not load token from database:', error.message);
     }
   }
 
