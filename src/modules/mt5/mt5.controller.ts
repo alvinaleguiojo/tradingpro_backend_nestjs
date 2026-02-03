@@ -244,4 +244,53 @@ export class Mt5Controller {
     const deals = await this.mt5Service.getDealsHistory(days);
     return { success: true, data: deals, count: deals.length };
   }
+
+  @Get('debug')
+  @ApiOperation({ summary: 'Debug MT5 connection - shows current state and tests API' })
+  async debugConnection() {
+    try {
+      // Step 1: Get current token/connection info (without reconnecting)
+      const connectionInfo = await this.mt5Service.getDebugInfo();
+      
+      // Step 2: Try to get a quote (quick test)
+      let quoteTest: any = null;
+      let quoteError: string | null = null;
+      try {
+        const quote = await this.mt5Service.getQuote('XAUUSDm');
+        quoteTest = quote ? { bid: quote.bid, ask: quote.ask, time: quote.time } : null;
+      } catch (e: any) {
+        quoteError = e.message;
+      }
+
+      // Step 3: Try to get price history (main issue we're debugging)
+      let historyTest: any = null;
+      let historyError: string | null = null;
+      try {
+        const history = await this.mt5Service.getPriceHistory('XAUUSDm', 'M5', 10);
+        historyTest = { 
+          count: history.length, 
+          firstCandle: history[0] || null,
+          lastCandle: history[history.length - 1] || null,
+        };
+      } catch (e: any) {
+        historyError = e.message;
+      }
+
+      return {
+        success: true,
+        timestamp: new Date().toISOString(),
+        connection: connectionInfo,
+        tests: {
+          quote: quoteError ? { error: quoteError } : quoteTest,
+          history: historyError ? { error: historyError } : historyTest,
+        },
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
 }

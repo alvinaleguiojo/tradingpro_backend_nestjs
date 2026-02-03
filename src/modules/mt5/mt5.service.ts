@@ -868,4 +868,66 @@ export class Mt5Service implements OnModuleInit {
   getToken(): string | null {
     return this.token;
   }
+
+  /**
+   * Get debug info about current connection state
+   * Used for diagnosing connection issues
+   */
+  async getDebugInfo(): Promise<{
+    hasToken: boolean;
+    tokenPreview: string | null;
+    hasCredentials: boolean;
+    credentialsUser: string | null;
+    credentialsHost: string | null;
+    lastTokenValidation: number;
+    envCredentials: {
+      user: string | null;
+      host: string | null;
+    };
+    dbConnection: any;
+  }> {
+    // Get credentials from env
+    const envUser = process.env.MT5_USER || null;
+    const envHost = process.env.MT5_HOST || null;
+
+    // Get connection from database
+    let dbConnection: any = null;
+    try {
+      const connection = await this.mt5ConnectionRepo.findOne({
+        where: {},
+        order: { updatedAt: 'DESC' },
+      });
+      if (connection) {
+        // Remove sensitive data
+        dbConnection = {
+          user: connection.user,
+          host: connection.host,
+          port: connection.port,
+          isConnected: connection.isConnected,
+          hasToken: !!connection.token,
+          tokenPreview: connection.token ? `${connection.token.substring(0, 8)}...` : null,
+          lastConnectedAt: connection.lastConnectedAt,
+          updatedAt: connection.updatedAt,
+        };
+      }
+    } catch (e: any) {
+      dbConnection = { error: e.message };
+    }
+
+    const creds = this.getCredentials();
+
+    return {
+      hasToken: !!this.token,
+      tokenPreview: this.token ? `${this.token.substring(0, 8)}...` : null,
+      hasCredentials: !!(creds.user && creds.password && creds.host),
+      credentialsUser: creds.user || null,
+      credentialsHost: creds.host || null,
+      lastTokenValidation: this.lastTokenValidation,
+      envCredentials: {
+        user: envUser,
+        host: envHost,
+      },
+      dbConnection,
+    };
+  }
 }
