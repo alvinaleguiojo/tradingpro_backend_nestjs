@@ -103,7 +103,9 @@ export class AutoTradingService implements OnModuleInit {
       this.logger.log(`📊 Signal: ${signal.signalType} | Confidence: ${signal.confidence}% | Strength: ${signal.strength}`);
 
       // Step 2: Execute trade if signal is actionable
-      if (signal.signalType !== 'HOLD' && signal.confidence >= 30) {
+      // Use lower confidence threshold for scalping mode (20%) vs standard mode (30%)
+      const minConfidence = this.scalpingMode ? 20 : 30;
+      if (signal.signalType !== 'HOLD' && signal.confidence >= minConfidence) {
         const trade = await this.tradingService.executeTrade(signal);
         
         if (trade) {
@@ -112,7 +114,7 @@ export class AutoTradingService implements OnModuleInit {
           this.logger.log('⏸️ Trade not executed (conditions not met)');
         }
       } else {
-        this.logger.log(`⏸️ Signal not actionable: ${signal.signalType} with ${signal.confidence}% confidence`);
+        this.logger.log(`⏸️ Signal not actionable: ${signal.signalType} with ${signal.confidence}% confidence (min: ${minConfidence}%)`);
       }
 
       const duration = Date.now() - startTime;
@@ -187,8 +189,10 @@ export class AutoTradingService implements OnModuleInit {
       this.logger.log(`📊 Signal: ${signal.signalType} | Confidence: ${signal.confidence}% | Strength: ${signal.strength}`);
 
       // Step 2: Execute trade if signal is actionable
+      // Use lower confidence threshold for scalping mode (20%) vs standard mode (30%)
+      const minConfidenceForTrade = this.scalpingMode ? 20 : 30;
       let trade: Trade | null = null;
-      if (signal.signalType !== 'HOLD' && signal.confidence >= 30) {
+      if (signal.signalType !== 'HOLD' && signal.confidence >= minConfidenceForTrade) {
         trade = await this.tradingService.executeTrade(signal);
         
         if (trade) {
@@ -197,7 +201,7 @@ export class AutoTradingService implements OnModuleInit {
           this.logger.log('⏸️ Trade not executed (conditions not met)');
         }
       } else {
-        this.logger.log(`⏸️ Signal not actionable: ${signal.signalType} with ${signal.confidence}% confidence`);
+        this.logger.log(`⏸️ Signal not actionable: ${signal.signalType} with ${signal.confidence}% confidence (min: ${minConfidenceForTrade}%)`);
       }
 
       const duration = Date.now() - startTime;
