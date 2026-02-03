@@ -207,6 +207,12 @@ export class Mt5Controller {
   @ApiOperation({ summary: 'Force refresh MT5 connection token' })
   async refreshConnection() {
     try {
+      // First clear any invalid tokens
+      const cleared = await this.mt5Service.clearInvalidTokens();
+      if (cleared.cleared > 0) {
+        console.log(`Cleared ${cleared.cleared} invalid token(s) from database`);
+      }
+      
       // Force reconnect by clearing token and reconnecting
       await this.mt5Service.forceReconnect();
       const accountSummary = await this.mt5Service.getAccountSummary();
@@ -214,6 +220,7 @@ export class Mt5Controller {
       return {
         success: true,
         message: 'MT5 connection refreshed successfully',
+        clearedInvalidTokens: cleared.cleared,
         data: {
           connected: !!accountSummary,
           balance: accountSummary?.balance || null,
@@ -224,6 +231,24 @@ export class Mt5Controller {
       return {
         success: false,
         message: `Failed to refresh connection: ${error.message}`,
+        error: error.message,
+      };
+    }
+  }
+
+  @Post('clear-tokens')
+  @ApiOperation({ summary: 'Clear any invalid/corrupted tokens from database' })
+  async clearInvalidTokens() {
+    try {
+      const result = await this.mt5Service.clearInvalidTokens();
+      return {
+        success: true,
+        message: `Cleared ${result.cleared} invalid token(s)`,
+        cleared: result.cleared,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
         error: error.message,
       };
     }

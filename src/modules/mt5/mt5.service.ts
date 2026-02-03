@@ -171,6 +171,39 @@ export class Mt5Service implements OnModuleInit {
   }
 
   /**
+   * Clear any invalid tokens from database
+   * Use this when the stored token is corrupted (e.g., JSON error object instead of UUID)
+   */
+  async clearInvalidTokens(): Promise<{ cleared: number }> {
+    try {
+      const connections = await this.mt5ConnectionRepo.find();
+      let clearedCount = 0;
+      
+      for (const connection of connections) {
+        const token = connection.token as string | null;
+        if (token && !this.isValidToken(token)) {
+          const tokenPreview = token.substring(0, 30);
+          this.logger.warn(`Clearing invalid token for user ${connection.user}: ${tokenPreview}...`);
+          connection.token = null;
+          connection.isConnected = false;
+          await this.mt5ConnectionRepo.save(connection);
+          clearedCount++;
+        }
+      }
+      
+      // Also clear the in-memory token if invalid
+      if (this.token && !this.isValidToken(this.token)) {
+        this.token = null;
+      }
+      
+      return { cleared: clearedCount };
+    } catch (error) {
+      this.logger.error('Error clearing invalid tokens:', error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Get current credentials (dynamic or from .env)
    */
   private getCredentials(): { user: string; password: string; host: string; port: string } {
@@ -214,6 +247,17 @@ export class Mt5Service implements OnModuleInit {
     }
   }
 
+  /**
+   * Validate if a token is a valid UUID format
+   * Returns true only if token is a valid UUID string
+   */
+  private isValidToken(token: unknown): boolean {
+    if (typeof token !== 'string') return false;
+    // UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    return uuidRegex.test(token);
+  }
+
   async connect(): Promise<string> {
     const { user, password, host, port } = this.getCredentials();
 
@@ -227,7 +271,8 @@ export class Mt5Service implements OnModuleInit {
         timeout: this.CONNECTION_TIMEOUT, // Faster timeout for connection
       });
 
-      if (response.data && !response.data.error) {
+      // Validate the response is a valid UUID token, not an error object
+      if (response.data && this.isValidToken(response.data)) {
         this.token = response.data;
         
         // Save connection info
@@ -268,7 +313,12 @@ export class Mt5Service implements OnModuleInit {
 
         return this.token!;
       } else {
-        throw new Error(response.data?.error || 'Connection failed');
+        // Response is not a valid token - extract error message
+        const errorMsg = typeof response.data === 'object' 
+          ? (response.data?.error || response.data?.message || JSON.stringify(response.data))
+          : 'Invalid token format received';
+        this.logger.error(`MT5 Connect returned invalid token: ${errorMsg}`);
+        throw new Error(`Connection failed: ${errorMsg}`);
       }
     } catch (error) {
       await this.log(
@@ -366,6 +416,18 @@ export class Mt5Service implements OnModuleInit {
       });
       
       if (connection?.token) {
+        const token = connection.token as string;
+        // Validate token format - must be UUID, not an error object
+        if (!this.isValidToken(token)) {
+          const tokenPreview = token.substring(0, 20);
+          this.logger.warn(`Invalid token format in database (starts with: ${tokenPreview}...), clearing it`);
+          // Clear the invalid token from database
+          connection.token = null;
+          connection.isConnected = false;
+          await this.mt5ConnectionRepo.save(connection);
+          return;
+        }
+        
         // Check if token is less than 30 minutes old
         const tokenAge = Date.now() - connection.lastConnectedAt.getTime();
         if (tokenAge < 30 * 60 * 1000) { // 30 minutes
