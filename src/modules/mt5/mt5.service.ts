@@ -487,34 +487,55 @@ export class Mt5Service implements OnModuleInit {
       };
 
       const tf = tfMap[timeframe] || 15;
-
-      // Use PriceHistoryToday for live data - PriceHistoryMonth returns stale historical data
       let rawBars: any[] = [];
+
+      // Use /PriceHistory with date range - this returns actual live data
+      // Calculate date range based on timeframe and count needed
+      const now = new Date();
+      const daysBack = Math.ceil((count * tf) / (24 * 60)) + 1; // Calculate days needed based on timeframe minutes
+      const fromDate = new Date(now.getTime() - daysBack * 24 * 60 * 60 * 1000);
       
-      // Get today's live data
+      const from = fromDate.toISOString().split('T')[0]; // YYYY-MM-DD
+      const to = now.toISOString().split('T')[0];
+
       try {
-        const todayResponse = await this.axiosClient.get('/PriceHistoryToday', {
+        const response = await this.axiosClient.get('/PriceHistory', {
           params: { 
             id: this.token, 
             symbol, 
             timeframe: tf,
+            from,
+            to,
           },
         });
-        rawBars = Array.isArray(todayResponse.data) ? todayResponse.data : [];
-        this.logger.log(`PriceHistoryToday returned ${rawBars.length} candles for ${symbol} ${timeframe}`);
+        rawBars = Array.isArray(response.data) ? response.data : [];
+        this.logger.log(`PriceHistory (${from} to ${to}) returned ${rawBars.length} candles for ${symbol} ${timeframe}`);
       } catch (e) {
-        this.logger.warn(`PriceHistoryToday failed for ${symbol}: ${e.message}`);
+        this.logger.warn(`PriceHistory failed for ${symbol}: ${e.message}, trying PriceHistoryToday`);
+        
+        // Fallback to PriceHistoryToday
+        try {
+          const todayResponse = await this.axiosClient.get('/PriceHistoryToday', {
+            params: { 
+              id: this.token, 
+              symbol, 
+              timeframe: tf,
+            },
+          });
+          rawBars = Array.isArray(todayResponse.data) ? todayResponse.data : [];
+          this.logger.log(`PriceHistoryToday returned ${rawBars.length} candles for ${symbol} ${timeframe}`);
+        } catch (e2) {
+          this.logger.error(`PriceHistoryToday also failed: ${e2.message}`);
+        }
       }
 
-      // If today's data is empty, log error (PriceHistoryMonth has stale 2022 data, don't use it)
       if (rawBars.length === 0) {
         this.logger.warn(`No price history data received for ${symbol} - MT5 may be disconnected`);
         return [];
       }
 
-      // For scalping, we only need 30-50 candles, so today's data is sufficient
-      // Take the last 'count' candles or all if less than count
-      const candlesToUse = rawBars.slice(-Math.min(count, rawBars.length));
+      // Take the last 'count' candles
+      const candlesToUse = rawBars.slice(-count);
 
       // Map MT5 API response (openPrice, highPrice, etc.) to our interface (open, high, etc.)
       const bars: Mt5Bar[] = candlesToUse.map((bar: any) => ({
