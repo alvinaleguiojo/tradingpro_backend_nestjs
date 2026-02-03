@@ -16,6 +16,12 @@ export class AutoTradingService implements OnModuleInit {
   private isRunning = false;
   private isEnabled: boolean;
   private scalpingMode: boolean;
+  
+  // Track accounts that have traded in current cycle to prevent duplicates
+  private accountsTradedThisCycle: Set<string> = new Set();
+  // Track last trade time per account to enforce cooldown
+  private lastTradeTime: Map<string, number> = new Map();
+  private readonly TRADE_COOLDOWN_MS = 60000; // 1 minute cooldown between trades per account
 
   constructor(
     private configService: ConfigService,
@@ -178,6 +184,9 @@ export class AutoTradingService implements OnModuleInit {
 
     this.isRunning = true;
     const startTime = Date.now();
+    
+    // Clear the cycle tracking at start of new cycle
+    this.accountsTradedThisCycle.clear();
 
     try {
       // Get all active accounts
@@ -227,7 +236,22 @@ export class AutoTradingService implements OnModuleInit {
       // Run trading cycle for each account with the SAME signal
       for (const account of accounts) {
         try {
-          this.logger.log(`\n📊 Processing account: ${account.user}`);
+          const accountId = account.user;
+          this.logger.log(`\n📊 Processing account: ${accountId}`);
+          
+          // Check if this account already traded in this cycle
+          if (this.accountsTradedThisCycle.has(accountId)) {
+            this.logger.log(`⏸️ [${accountId}] Already traded in this cycle, skipping`);
+            continue;
+          }
+          
+          // Check cooldown - prevent rapid-fire trades
+          const lastTrade = this.lastTradeTime.get(accountId);
+          if (lastTrade && (Date.now() - lastTrade) < this.TRADE_COOLDOWN_MS) {
+            const remainingCooldown = Math.round((this.TRADE_COOLDOWN_MS - (Date.now() - lastTrade)) / 1000);
+            this.logger.log(`⏸️ [${accountId}] Trade cooldown active (${remainingCooldown}s remaining), skipping`);
+            continue;
+          }
           
           // Connect to this account
           await this.ensureMt5ConnectionForAccount(account);
@@ -238,8 +262,8 @@ export class AutoTradingService implements OnModuleInit {
 
           await this.tradingService.logEvent(
             TradingEventType.CRON_EXECUTION,
-            `Starting trading cycle for ${symbol} ${timeframe} - Account: ${account.user}`,
-            { symbol, timeframe, accountId: account.user, timestamp: new Date().toISOString() },
+            `Starting trading cycle for ${symbol} ${timeframe} - Account: ${accountId}`,
+            { symbol, timeframe, accountId, timestamp: new Date().toISOString() },
           );
 
           // Clone the master signal with this account's symbol
@@ -252,9 +276,12 @@ export class AutoTradingService implements OnModuleInit {
           const trade = await this.tradingService.executeTrade(accountSignal as any);
           
           if (trade) {
-            this.logger.log(`✅ [${account.user}] Trade executed: ${trade.direction} ${trade.lotSize} ${trade.symbol} @ ${trade.entryPrice}`);
+            this.logger.log(`✅ [${accountId}] Trade executed: ${trade.direction} ${trade.lotSize} ${trade.symbol} @ ${trade.entryPrice}`);
+            // Mark this account as traded in this cycle and set cooldown
+            this.accountsTradedThisCycle.add(accountId);
+            this.lastTradeTime.set(accountId, Date.now());
           } else {
-            this.logger.log(`⏸️ [${account.user}] Trade not executed (conditions not met)`);
+            this.logger.log(`⏸️ [${accountId}] Trade not executed (conditions not met)`);
           }
 
         } catch (accountError) {
@@ -313,6 +340,9 @@ export class AutoTradingService implements OnModuleInit {
     this.isRunning = true;
     const startTime = Date.now();
     const accountResults: any[] = [];
+    
+    // Clear the cycle tracking at start of new cycle
+    this.accountsTradedThisCycle.clear();
 
     try {
       // Get all active accounts
@@ -372,8 +402,9 @@ export class AutoTradingService implements OnModuleInit {
 
       // ========== EXECUTE SAME SIGNAL ON ALL ACCOUNTS ==========
       for (const account of accounts) {
+        const accountId = account.user;
         const accountResult: any = {
-          accountId: account.user,
+          accountId: accountId,
           success: false,
           signal: masterSignalData,
           trade: null,
@@ -381,7 +412,27 @@ export class AutoTradingService implements OnModuleInit {
         };
 
         try {
-          this.logger.log(`\n📊 Processing account: ${account.user}`);
+          this.logger.log(`\n📊 Processing account: ${accountId}`);
+          
+          // Check if this account already traded in this cycle
+          if (this.accountsTradedThisCycle.has(accountId)) {
+            this.logger.log(`⏸️ [${accountId}] Already traded in this cycle, skipping`);
+            accountResult.success = true;
+            accountResult.message = 'Already traded in this cycle';
+            accountResults.push(accountResult);
+            continue;
+          }
+          
+          // Check cooldown - prevent rapid-fire trades
+          const lastTrade = this.lastTradeTime.get(accountId);
+          if (lastTrade && (Date.now() - lastTrade) < this.TRADE_COOLDOWN_MS) {
+            const remainingCooldown = Math.round((this.TRADE_COOLDOWN_MS - (Date.now() - lastTrade)) / 1000);
+            this.logger.log(`⏸️ [${accountId}] Trade cooldown active (${remainingCooldown}s remaining), skipping`);
+            accountResult.success = true;
+            accountResult.message = `Trade cooldown active (${remainingCooldown}s remaining)`;
+            accountResults.push(accountResult);
+            continue;
+          }
           
           // Connect to this account
           await this.ensureMt5ConnectionForAccount(account);
@@ -392,8 +443,8 @@ export class AutoTradingService implements OnModuleInit {
           
           await this.tradingService.logEvent(
             TradingEventType.CRON_EXECUTION,
-            `Trading cycle for ${symbol} - Account: ${account.user} - Signal: ${masterSignal.signalType}`,
-            { symbol, timeframe, accountId: account.user, signalType: masterSignal.signalType },
+            `Trading cycle for ${symbol} - Account: ${accountId} - Signal: ${masterSignal.signalType}`,
+            { symbol, timeframe, accountId, signalType: masterSignal.signalType },
           );
 
           // Clone the master signal with this account's symbol
@@ -406,13 +457,16 @@ export class AutoTradingService implements OnModuleInit {
           const trade = await this.tradingService.executeTrade(accountSignal as any);
           
           if (trade) {
-            this.logger.log(`✅ [${account.user}] Trade executed: ${trade.direction} @ ${trade.entryPrice}`);
+            this.logger.log(`✅ [${accountId}] Trade executed: ${trade.direction} @ ${trade.entryPrice}`);
             accountResult.trade = {
               id: (trade as any)._id?.toString(),
               direction: trade.direction,
               entryPrice: trade.entryPrice,
               lotSize: trade.lotSize,
             };
+            // Mark this account as traded in this cycle and set cooldown
+            this.accountsTradedThisCycle.add(accountId);
+            this.lastTradeTime.set(accountId, Date.now());
           }
 
           accountResult.success = true;
