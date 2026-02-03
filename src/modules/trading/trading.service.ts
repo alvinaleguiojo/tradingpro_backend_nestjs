@@ -480,12 +480,19 @@ export class TradingService implements OnModuleInit {
         `LotSize ${lotSize}, Daily Target Progress: ${mmStatus.dailyTargetProgress.toFixed(1)}%`
       );
 
-      // Check max positions
-      const maxPositions = parseInt(this.configService.get('TRADING_MAX_POSITIONS', '3'));
+      // Check max positions - in scalping mode, only allow 1 position at a time
+      const defaultMaxPositions = this.scalpingMode ? '1' : '3';
+      const maxPositions = parseInt(this.configService.get('TRADING_MAX_POSITIONS', defaultMaxPositions));
       const openOrders = await this.mt5Service.getOpenedOrdersForSymbol(signal.symbol);
       
       if (openOrders.length >= maxPositions) {
-        this.logger.log(`Max positions reached for ${signal.symbol}`);
+        this.logger.log(`Max positions reached for ${signal.symbol}: ${openOrders.length}/${maxPositions}`);
+        return null;
+      }
+
+      // Extra check: In scalping mode, don't open if ANY position exists on this symbol
+      if (this.scalpingMode && openOrders.length > 0) {
+        this.logger.log(`Scalping mode: Already have ${openOrders.length} position(s) on ${signal.symbol}, waiting for close`);
         return null;
       }
 
