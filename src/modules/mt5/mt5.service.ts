@@ -1,10 +1,10 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
 import axios, { AxiosInstance } from 'axios';
-import { Mt5Connection } from '../../entities/mt5-connection.entity';
-import { TradingLog, TradingEventType } from '../../entities/trading-log.entity';
+import { Mt5Connection, Mt5ConnectionDocument } from '../../schemas/mt5-connection.schema';
+import { TradingLog, TradingLogDocument, TradingEventType } from '../../schemas/trading-log.schema';
 
 export interface Mt5Quote {
   symbol: string;
@@ -80,10 +80,10 @@ export class Mt5Service implements OnModuleInit {
 
   constructor(
     private configService: ConfigService,
-    @InjectRepository(Mt5Connection)
-    private mt5ConnectionRepo: Repository<Mt5Connection>,
-    @InjectRepository(TradingLog)
-    private tradingLogRepo: Repository<TradingLog>,
+    @InjectModel(Mt5Connection.name)
+    private mt5ConnectionModel: Model<Mt5ConnectionDocument>,
+    @InjectModel(TradingLog.name)
+    private tradingLogModel: Model<TradingLogDocument>,
   ) {
     this.baseUrl = this.configService.get('MT5_API_BASE_URL', 'https://mt5.mtapi.io');
     this.axiosClient = axios.create({
@@ -107,10 +107,7 @@ export class Mt5Service implements OnModuleInit {
    */
   private async loadCredentialsFromDb(): Promise<void> {
     try {
-      const connection = await this.mt5ConnectionRepo.findOne({
-        where: {},
-        order: { updatedAt: 'DESC' },
-      });
+      const connection = await this.mt5ConnectionModel.findOne({}).sort({ updatedAt: -1 }).exec();
       
       if (connection && connection.user && (connection as any).password && connection.host) {
         this.dynamicCredentials = {
@@ -131,26 +128,24 @@ export class Mt5Service implements OnModuleInit {
    */
   private async saveCredentialsToDb(user: string, password: string, host: string, port: string): Promise<void> {
     try {
-      let connection = await this.mt5ConnectionRepo.findOne({
-        where: { user },
-      });
+      const connection = await this.mt5ConnectionModel.findOne({ user }).exec();
       
       if (connection) {
-        connection.password = password;
-        connection.host = host;
-        connection.port = parseInt(port, 10);
-        connection.updatedAt = new Date();
+        await this.mt5ConnectionModel.updateOne(
+          { user },
+          { password, host, port: parseInt(port, 10), updatedAt: new Date() }
+        );
       } else {
-        connection = this.mt5ConnectionRepo.create({
+        const newConnection = new this.mt5ConnectionModel({
           accountId: user,
           user,
           password,
           host,
           port: parseInt(port, 10),
         });
+        await newConnection.save();
       }
       
-      await this.mt5ConnectionRepo.save(connection);
       this.logger.log(`Saved MT5 credentials to database for account ${user}`);
     } catch (error) {
       this.logger.warn('Could not save credentials to database:', error.message);
@@ -175,9 +170,7 @@ export class Mt5Service implements OnModuleInit {
    */
   async getAllAccounts(): Promise<any[]> {
     try {
-      const connections = await this.mt5ConnectionRepo.find({
-        order: { updatedAt: 'DESC' },
-      });
+      const connections = await this.mt5ConnectionModel.find().sort({ updatedAt: -1 }).exec();
       
       return connections.map(conn => ({
         accountId: conn.accountId,
@@ -190,7 +183,7 @@ export class Mt5Service implements OnModuleInit {
         equity: conn.equity,
         currency: conn.currency,
         lastConnectedAt: conn.lastConnectedAt,
-        updatedAt: conn.updatedAt,
+        updatedAt: (conn as any).updatedAt,
       }));
     } catch (error) {
       this.logger.error('Error getting all accounts:', error.message);
@@ -281,12 +274,12 @@ export class Mt5Service implements OnModuleInit {
     totalOpenTrades: number;
     accounts: any[];
   }> {
-    const connections = await this.mt5ConnectionRepo.find();
+    const connections = await this.mt5ConnectionModel.find().exec();
     const results: any[] = [];
     let totalOpenTrades = 0;
 
     for (const conn of connections) {
-      if (!conn.user || !conn.password || !conn.host) {
+      if (!conn.user || !(conn as any).password || !conn.host) {
         results.push({
           account: conn.user || conn.accountId,
           success: false,
@@ -298,7 +291,7 @@ export class Mt5Service implements OnModuleInit {
 
       const accountResult = await this.getTradesForAccount(
         conn.user,
-        conn.password,
+        (conn as any).password,
         conn.host,
         conn.port?.toString() || '443',
       );
@@ -320,7 +313,7 @@ export class Mt5Service implements OnModuleInit {
    */
   async clearInvalidTokens(): Promise<{ cleared: number }> {
     try {
-      const connections = await this.mt5ConnectionRepo.find();
+      const connections = await this.mt5ConnectionModel.find().exec();
       let clearedCount = 0;
       
       for (const connection of connections) {
@@ -328,9 +321,10 @@ export class Mt5Service implements OnModuleInit {
         if (token && !this.isValidToken(token)) {
           const tokenPreview = token.substring(0, 30);
           this.logger.warn(`Clearing invalid token for user ${connection.user}: ${tokenPreview}...`);
-          connection.token = null;
-          connection.isConnected = false;
-          await this.mt5ConnectionRepo.save(connection);
+          await this.mt5ConnectionModel.updateOne(
+            { _id: connection._id },
+            { token: null, isConnected: false }
+          );
           clearedCount++;
         }
       }
@@ -385,13 +379,13 @@ export class Mt5Service implements OnModuleInit {
     data?: Record<string, any>,
     level: string = 'info',
   ) {
-    const log = this.tradingLogRepo.create({
+    const log = new this.tradingLogModel({
       eventType,
       message,
       data,
       level,
     });
-    await this.tradingLogRepo.save(log);
+    await log.save();
     
     if (level === 'error') {
       this.logger.error(message, data);
@@ -429,12 +423,10 @@ export class Mt5Service implements OnModuleInit {
         this.token = response.data;
         
         // Save connection info
-        let connection = await this.mt5ConnectionRepo.findOne({
-          where: { user },
-        });
+        let connection = await this.mt5ConnectionModel.findOne({ user }).exec();
 
         if (!connection) {
-          connection = this.mt5ConnectionRepo.create({
+          connection = new this.mt5ConnectionModel({
             accountId: user,
             user,
             host,
@@ -442,7 +434,7 @@ export class Mt5Service implements OnModuleInit {
           });
         }
 
-        connection.token = this.token;
+        connection.token = this.token || '';
         connection.isConnected = true;
         connection.lastConnectedAt = new Date();
         
@@ -456,7 +448,7 @@ export class Mt5Service implements OnModuleInit {
           connection.currency = accountSummary.currency;
         }
 
-        await this.mt5ConnectionRepo.save(connection);
+        await connection.save();
         
         await this.log(
           TradingEventType.CONNECTION_ESTABLISHED,
@@ -563,10 +555,7 @@ export class Mt5Service implements OnModuleInit {
    */
   private async loadTokenFromDb(): Promise<void> {
     try {
-      const connection = await this.mt5ConnectionRepo.findOne({
-        where: { isConnected: true },
-        order: { lastConnectedAt: 'DESC' },
-      });
+      const connection = await this.mt5ConnectionModel.findOne({ isConnected: true }).sort({ lastConnectedAt: -1 }).exec();
       
       if (connection?.token) {
         const token = connection.token as string;
@@ -575,9 +564,10 @@ export class Mt5Service implements OnModuleInit {
           const tokenPreview = token.substring(0, 20);
           this.logger.warn(`Invalid token format in database (starts with: ${tokenPreview}...), clearing it`);
           // Clear the invalid token from database
-          connection.token = null;
-          connection.isConnected = false;
-          await this.mt5ConnectionRepo.save(connection);
+          await this.mt5ConnectionModel.updateOne(
+            { _id: connection._id },
+            { token: null, isConnected: false }
+          );
           return;
         }
         
@@ -587,7 +577,7 @@ export class Mt5Service implements OnModuleInit {
           this.token = connection.token;
           this.dynamicCredentials = {
             user: connection.user,
-            password: connection.password || '',
+            password: (connection as any).password || '',
             host: connection.host,
             port: connection.port?.toString() || '443',
           };
@@ -1108,10 +1098,7 @@ export class Mt5Service implements OnModuleInit {
     // Get connection from database
     let dbConnection: any = null;
     try {
-      const connection = await this.mt5ConnectionRepo.findOne({
-        where: {},
-        order: { updatedAt: 'DESC' },
-      });
+      const connection = await this.mt5ConnectionModel.findOne({}).sort({ updatedAt: -1 }).exec();
       if (connection) {
         // Remove sensitive data
         dbConnection = {
@@ -1122,7 +1109,7 @@ export class Mt5Service implements OnModuleInit {
           hasToken: !!connection.token,
           tokenPreview: connection.token ? `${connection.token.substring(0, 8)}...` : null,
           lastConnectedAt: connection.lastConnectedAt,
-          updatedAt: connection.updatedAt,
+          updatedAt: (connection as any).updatedAt,
         };
       }
     } catch (e: any) {

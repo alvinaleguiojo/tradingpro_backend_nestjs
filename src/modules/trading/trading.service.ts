@@ -1,10 +1,10 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
-import { Trade, TradeDirection, TradeStatus } from '../../entities/trade.entity';
-import { TradingSignal, SignalType, SignalStrength } from '../../entities/trading-signal.entity';
-import { TradingLog, TradingEventType } from '../../entities/trading-log.entity';
+import { Trade, TradeDocument, TradeDirection, TradeStatus } from '../../schemas/trade.schema';
+import { TradingSignal, TradingSignalDocument, SignalType, SignalStrength } from '../../schemas/trading-signal.schema';
+import { TradingLog, TradingLogDocument, TradingEventType } from '../../schemas/trading-log.schema';
 import { Mt5Service, OrderSendResult } from '../mt5/mt5.service';
 import { IctStrategyService } from '../ict-strategy/ict-strategy.service';
 import { OpenAiService, AiTradeRecommendation } from '../openai/openai.service';
@@ -12,7 +12,6 @@ import { MoneyManagementService } from '../money-management/money-management.ser
 import { KillZoneService } from '../ict-strategy/services/kill-zone.service';
 import { ScalpingStrategyService } from '../ict-strategy/services/scalping-strategy.service';
 import { IctAnalysisResult, TradeSetup, Candle } from '../ict-strategy/types';
-import { withRetry } from '../../utils/database.utils';
 
 @Injectable()
 export class TradingService implements OnModuleInit {
@@ -21,12 +20,12 @@ export class TradingService implements OnModuleInit {
 
   constructor(
     private configService: ConfigService,
-    @InjectRepository(Trade)
-    private tradeRepo: Repository<Trade>,
-    @InjectRepository(TradingSignal)
-    private signalRepo: Repository<TradingSignal>,
-    @InjectRepository(TradingLog)
-    private logRepo: Repository<TradingLog>,
+    @InjectModel(Trade.name)
+    private tradeModel: Model<TradeDocument>,
+    @InjectModel(TradingSignal.name)
+    private signalModel: Model<TradingSignalDocument>,
+    @InjectModel(TradingLog.name)
+    private logModel: Model<TradingLogDocument>,
     private mt5Service: Mt5Service,
     private ictStrategyService: IctStrategyService,
     private openAiService: OpenAiService,
@@ -85,7 +84,7 @@ export class TradingService implements OnModuleInit {
     tradeId?: string,
     signalId?: string,
   ) {
-    const log = this.logRepo.create({
+    const log = new this.logModel({
       eventType,
       message,
       data,
@@ -94,10 +93,7 @@ export class TradingService implements OnModuleInit {
       signalId,
     });
     
-    await withRetry(
-      () => this.logRepo.save(log),
-      { operationName: 'Save trading log', maxRetries: 3 }
-    );
+    await log.save();
     
     if (level === 'error') {
       this.logger.error(message, data);
@@ -112,7 +108,7 @@ export class TradingService implements OnModuleInit {
   async analyzeAndGenerateSignal(
     symbol: string,
     timeframe: string,
-  ): Promise<TradingSignal | null> {
+  ): Promise<TradingSignalDocument | null> {
     try {
       // Use M5 for scalping mode, otherwise use provided timeframe
       const analysisTimeframe = this.scalpingMode ? 'M5' : timeframe;
@@ -189,14 +185,14 @@ export class TradingService implements OnModuleInit {
           TradingEventType.SIGNAL_GENERATED,
           `SCALP signal: ${signal.signalType} with ${signal.confidence}% confidence`,
           { 
-            signalId: signal.id,
+            signalId: (signal as any)._id?.toString(),
             mode: 'SCALPING',
             reasons: scalpSetup.reasons,
             confluences: scalpSetup.confluences,
           },
           'info',
           undefined,
-          signal.id,
+          (signal as any)._id?.toString(),
         );
 
         return signal;
@@ -273,7 +269,7 @@ export class TradingService implements OnModuleInit {
         TradingEventType.SIGNAL_GENERATED,
         `Signal generated: ${signal.signalType} with ${signal.confidence}% confidence`,
         { 
-          signalId: signal.id, 
+          signalId: (signal as any)._id?.toString(), 
           ictAnalysis: {
             trend: ictAnalysis.marketStructure.trend,
             killZone: ictAnalysis.currentKillZone?.name,
@@ -287,7 +283,7 @@ export class TradingService implements OnModuleInit {
         },
         'info',
         undefined,
-        signal.id,
+        (signal as any)._id?.toString(),
       );
 
       return signal;
@@ -309,7 +305,7 @@ export class TradingService implements OnModuleInit {
     ictAnalysis: IctAnalysisResult,
     aiRecommendation: AiTradeRecommendation,
     currentPrice: number,
-  ): Promise<TradingSignal> {
+  ): Promise<TradingSignalDocument> {
     // Determine signal type and parameters
     let signalType: SignalType;
     let entryPrice: number;
@@ -348,7 +344,7 @@ export class TradingService implements OnModuleInit {
     else if (confidence >= 40) strength = SignalStrength.MODERATE;
     else strength = SignalStrength.WEAK;
 
-    const signal = this.signalRepo.create({
+    const signal = new this.signalModel({
       symbol: ictAnalysis.symbol,
       timeframe: ictAnalysis.timeframe,
       signalType,
@@ -370,10 +366,7 @@ export class TradingService implements OnModuleInit {
       executed: false,
     });
 
-    return await withRetry(
-      () => this.signalRepo.save(signal),
-      { operationName: 'Save trading signal', maxRetries: 3 }
-    );
+    return await signal.save();
   }
 
   /**
@@ -384,7 +377,7 @@ export class TradingService implements OnModuleInit {
     symbol: string,
     timeframe: string,
     currentPrice: number,
-  ): Promise<TradingSignal> {
+  ): Promise<TradingSignalDocument> {
     const signalType = scalpSetup.direction === 'BUY' ? SignalType.BUY : SignalType.SELL;
     
     // Scalping uses different strength thresholds (lower requirements)
@@ -394,7 +387,7 @@ export class TradingService implements OnModuleInit {
     else if (scalpSetup.confidence >= 30) strength = SignalStrength.MODERATE;
     else strength = SignalStrength.WEAK;
 
-    const signal = this.signalRepo.create({
+    const signal = new this.signalModel({
       symbol,
       timeframe,
       signalType,
@@ -421,16 +414,13 @@ export class TradingService implements OnModuleInit {
       executed: false,
     });
 
-    return await withRetry(
-      () => this.signalRepo.save(signal),
-      { operationName: 'Save scalping signal', maxRetries: 3 }
-    );
+    return await signal.save();
   }
 
   /**
    * Execute a trade based on a signal
    */
-  async executeTrade(signal: TradingSignal): Promise<Trade | null> {
+  async executeTrade(signal: TradingSignalDocument): Promise<TradeDocument | null> {
     const accountId = this.configService.get('MT5_USER', 'default');
     
     try {
@@ -509,6 +499,7 @@ export class TradingService implements OnModuleInit {
 
       // Send order to MT5
       const direction = signal.signalType === SignalType.BUY ? 'BUY' : 'SELL';
+      const signalIdStr = (signal as any)._id?.toString() || '';
       
       const orderResult = await this.mt5Service.sendOrder({
         symbol: signal.symbol,
@@ -516,23 +507,23 @@ export class TradingService implements OnModuleInit {
         volume: lotSize,
         stopLoss: signal.stopLoss,
         takeProfit: signal.takeProfit,
-        comment: `ICT_L${currentLevel.level}_${signal.id.substring(0, 6)}`,
+        comment: `ICT_L${currentLevel.level}_${signalIdStr.substring(0, 6)}`,
       });
 
       if (orderResult.error) {
         await this.logEvent(
           TradingEventType.ERROR,
           `Order execution failed: ${orderResult.error}`,
-          { signal: signal.id, orderResult },
+          { signal: signalIdStr, orderResult },
           'error',
           undefined,
-          signal.id,
+          signalIdStr,
         );
         return null;
       }
 
       // Create trade record
-      const trade = this.tradeRepo.create({
+      const trade = new this.tradeModel({
         mt5Ticket: orderResult.order,
         symbol: signal.symbol,
         direction: direction === 'BUY' ? TradeDirection.BUY : TradeDirection.SELL,
@@ -541,7 +532,7 @@ export class TradingService implements OnModuleInit {
         takeProfit: signal.takeProfit,
         lotSize,
         status: TradeStatus.OPEN,
-        signalId: signal.id,
+        signalId: signal._id?.toString(),
         notes: signal.reasoning,
         metadata: {
           signalConfidence: signal.confidence,
@@ -553,28 +544,24 @@ export class TradingService implements OnModuleInit {
             dailyTarget: currentLevel.dailyTarget,
           },
         },
+        openedAt: new Date(),
       });
 
-      const savedTrade = await withRetry(
-        () => this.tradeRepo.save(trade),
-        { operationName: 'Save trade', maxRetries: 3 }
-      );
+      const savedTrade = await trade.save();
 
       // Update signal as executed
-      signal.executed = true;
-      signal.tradeId = savedTrade.id;
-      await withRetry(
-        () => this.signalRepo.save(signal),
-        { operationName: 'Update signal executed status', maxRetries: 3 }
+      await this.signalModel.updateOne(
+        { _id: signal._id },
+        { executed: true, tradeId: savedTrade._id?.toString() }
       );
 
       await this.logEvent(
         TradingEventType.TRADE_OPENED,
         `Trade opened: ${direction} ${lotSize} ${signal.symbol} @ ${orderResult.price}`,
-        { trade: savedTrade, orderResult },
+        { trade: savedTrade.toObject(), orderResult },
         'info',
-        savedTrade.id,
-        signal.id,
+        savedTrade._id?.toString(),
+        signal._id?.toString(),
       );
 
       return savedTrade;
@@ -582,10 +569,10 @@ export class TradingService implements OnModuleInit {
       await this.logEvent(
         TradingEventType.ERROR,
         `Trade execution error: ${error.message}`,
-        { error: error.message, signalId: signal.id },
+        { error: error.message, signalId: signal._id?.toString() },
         'error',
         undefined,
-        signal.id,
+        signal._id?.toString(),
       );
       return null;
     }
@@ -594,31 +581,22 @@ export class TradingService implements OnModuleInit {
   /**
    * Get open trades
    */
-  async getOpenTrades(): Promise<Trade[]> {
-    return this.tradeRepo.find({
-      where: { status: TradeStatus.OPEN },
-      order: { openedAt: 'DESC' },
-    });
+  async getOpenTrades(): Promise<TradeDocument[]> {
+    return this.tradeModel.find({ status: TradeStatus.OPEN }).sort({ openedAt: -1 }).exec();
   }
 
   /**
    * Get recent signals
    */
-  async getRecentSignals(limit: number = 20): Promise<TradingSignal[]> {
-    return this.signalRepo.find({
-      order: { createdAt: 'DESC' },
-      take: limit,
-    });
+  async getRecentSignals(limit: number = 20): Promise<TradingSignalDocument[]> {
+    return this.signalModel.find().sort({ createdAt: -1 }).limit(limit).exec();
   }
 
   /**
    * Get trading logs
    */
-  async getTradingLogs(limit: number = 50): Promise<TradingLog[]> {
-    return this.logRepo.find({
-      order: { createdAt: 'DESC' },
-      take: limit,
-    });
+  async getTradingLogs(limit: number = 50): Promise<TradingLogDocument[]> {
+    return this.logModel.find().sort({ createdAt: -1 }).limit(limit).exec();
   }
 
   /**
@@ -634,7 +612,7 @@ export class TradingService implements OnModuleInit {
     totalProfit: number;
   }> {
     // Get trades from database
-    const dbTrades = await this.tradeRepo.find();
+    const dbTrades = await this.tradeModel.find().exec();
     
     // Also get live open trades from MT5 to ensure accuracy
     let mt5OpenCount = 0;
@@ -686,8 +664,10 @@ export class TradingService implements OnModuleInit {
       
       if (!mt5Order) {
         // Trade was closed on MT5
-        trade.status = TradeStatus.CLOSED;
-        trade.closedAt = new Date();
+        await this.tradeModel.updateOne(
+          { _id: trade._id },
+          { status: TradeStatus.CLOSED, closedAt: new Date() }
+        );
         
         // Get current account balance to update money management
         const accountSummary = await this.mt5Service.getAccountSummary();
@@ -696,11 +676,6 @@ export class TradingService implements OnModuleInit {
         // Try to calculate profit from previous balance if we don't have it
         // The profit should be the difference or stored in trade metadata
         const profit = trade.profit || 0;
-        
-        await withRetry(
-          () => this.tradeRepo.save(trade),
-          { operationName: 'Update closed trade', maxRetries: 3 }
-        );
 
         // Update money management account state with the profit
         if (profit !== 0 && currentBalance > 0) {
@@ -715,16 +690,15 @@ export class TradingService implements OnModuleInit {
         await this.logEvent(
           TradingEventType.TRADE_CLOSED,
           `Trade ${trade.mt5Ticket} closed (synced from MT5) - Profit: $${profit?.toFixed(2) || '0.00'}`,
-          { trade, profit },
+          { trade: trade.toObject(), profit },
           'info',
-          trade.id,
+          trade._id?.toString(),
         );
       } else {
         // Update profit
-        trade.profit = mt5Order.profit;
-        await withRetry(
-          () => this.tradeRepo.save(trade),
-          { operationName: 'Update trade profit', maxRetries: 3 }
+        await this.tradeModel.updateOne(
+          { _id: trade._id },
+          { profit: mt5Order.profit }
         );
       }
     }

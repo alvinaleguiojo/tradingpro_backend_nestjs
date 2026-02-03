@@ -13,13 +13,13 @@ Automated trading system using NestJS, MT5 API, ICT (Inner Circle Trader) concep
   - Kill Zones (London, New York sessions)
 - **AI-Powered Analysis**: Uses OpenAI GPT-4 for enhanced market analysis
 - **Auto Trading**: Cron job runs every 15 minutes aligned with M15 candle close
-- **PostgreSQL Database**: Stores trades, signals, market data, and logs
+- **MongoDB Database**: Stores trades, signals, market data, and logs (optimized for serverless)
 - **REST API**: Full API for monitoring and control
 
 ## Prerequisites
 
 - Node.js 18+ 
-- PostgreSQL 15+
+- MongoDB (Atlas recommended for serverless)
 - MT5 Account (demo or live)
 - OpenAI API Key
 
@@ -42,10 +42,9 @@ cp .env.example .env
 # Edit .env with your credentials
 ```
 
-4. Start PostgreSQL (or use Docker):
-```bash
-docker-compose up -d postgres
-```
+4. Set up MongoDB:
+   - Create a MongoDB Atlas cluster (recommended) or use local MongoDB
+   - Get your connection string
 
 5. Run the application:
 ```bash
@@ -61,11 +60,7 @@ npm run start:prod
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| DATABASE_HOST | PostgreSQL host | localhost |
-| DATABASE_PORT | PostgreSQL port | 5432 |
-| DATABASE_USERNAME | PostgreSQL username | postgres |
-| DATABASE_PASSWORD | PostgreSQL password | postgres |
-| DATABASE_NAME | Database name | tradingpro |
+| MONGODB_URI | MongoDB connection string | mongodb://localhost:27017/tradingpro |
 | MT5_API_BASE_URL | MT5 REST API URL | https://mt5.mtapi.io |
 | MT5_USER | MT5 account number | - |
 | MT5_PASSWORD | MT5 password | - |

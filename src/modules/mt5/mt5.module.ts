@@ -1,10 +1,10 @@
 import { Module } from '@nestjs/common';
 import { HttpModule } from '@nestjs/axios';
-import { TypeOrmModule } from '@nestjs/typeorm';
+import { MongooseModule } from '@nestjs/mongoose';
 import { Mt5Service } from './mt5.service';
 import { Mt5Controller } from './mt5.controller';
-import { Mt5Connection } from '../../entities/mt5-connection.entity';
-import { TradingLog } from '../../entities/trading-log.entity';
+import { Mt5Connection, Mt5ConnectionSchema } from '../../schemas/mt5-connection.schema';
+import { TradingLog, TradingLogSchema } from '../../schemas/trading-log.schema';
 
 @Module({
   imports: [
@@ -12,7 +12,10 @@ import { TradingLog } from '../../entities/trading-log.entity';
       timeout: 30000,
       maxRedirects: 5,
     }),
-    TypeOrmModule.forFeature([Mt5Connection, TradingLog]),
+    MongooseModule.forFeature([
+      { name: Mt5Connection.name, schema: Mt5ConnectionSchema },
+      { name: TradingLog.name, schema: TradingLogSchema },
+    ]),
   ],
   controllers: [Mt5Controller],
   providers: [Mt5Service],

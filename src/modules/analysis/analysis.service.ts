@@ -1,10 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
 import { Mt5Service } from '../mt5/mt5.service';
 import { IctStrategyService } from '../ict-strategy/ict-strategy.service';
 import { OpenAiService } from '../openai/openai.service';
-import { MarketData } from '../../entities/market-data.entity';
+import { MarketData, MarketDataDocument } from '../../schemas/market-data.schema';
 import { Candle, IctAnalysisResult } from '../ict-strategy/types';
 
 @Injectable()
@@ -12,8 +12,8 @@ export class AnalysisService {
   private readonly logger = new Logger(AnalysisService.name);
 
   constructor(
-    @InjectRepository(MarketData)
-    private marketDataRepo: Repository<MarketData>,
+    @InjectModel(MarketData.name)
+    private marketDataModel: Model<MarketDataDocument>,
     private mt5Service: Mt5Service,
     private ictStrategyService: IctStrategyService,
     private openAiService: OpenAiService,
@@ -182,20 +182,18 @@ export class AnalysisService {
     timeframe: string,
     candles: any[],
   ): Promise<void> {
-    const marketDataEntities = candles.map(candle => 
-      this.marketDataRepo.create({
-        symbol,
-        timeframe,
-        open: candle.open,
-        high: candle.high,
-        low: candle.low,
-        close: candle.close,
-        volume: candle.tickVolume || candle.volume || 0,
-        timestamp: new Date(candle.time),
-      })
-    );
+    const marketDataDocs = candles.map(candle => ({
+      symbol,
+      timeframe,
+      open: candle.open,
+      high: candle.high,
+      low: candle.low,
+      close: candle.close,
+      volume: candle.tickVolume || candle.volume || 0,
+      timestamp: new Date(candle.time),
+    }));
 
-    await this.marketDataRepo.save(marketDataEntities);
+    await this.marketDataModel.insertMany(marketDataDocs);
   }
 
   /**
@@ -206,14 +204,11 @@ export class AnalysisService {
     timeframe: string,
     startDate: Date,
     endDate: Date,
-  ): Promise<MarketData[]> {
-    return this.marketDataRepo
-      .createQueryBuilder('data')
-      .where('data.symbol = :symbol', { symbol })
-      .andWhere('data.timeframe = :timeframe', { timeframe })
-      .andWhere('data.timestamp >= :startDate', { startDate })
-      .andWhere('data.timestamp <= :endDate', { endDate })
-      .orderBy('data.timestamp', 'ASC')
-      .getMany();
+  ): Promise<MarketDataDocument[]> {
+    return this.marketDataModel.find({
+      symbol,
+      timeframe,
+      timestamp: { $gte: startDate, $lte: endDate }
+    }).sort({ timestamp: 1 }).exec();
   }
 }

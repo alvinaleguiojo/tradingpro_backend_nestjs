@@ -1,12 +1,12 @@
 import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
+import { MongooseModule } from '@nestjs/mongoose';
 import { TradingService } from './trading.service';
 import { TradingController } from './trading.controller';
 import { AutoTradingService } from './auto-trading.service';
-import { Trade } from '../../entities/trade.entity';
-import { TradingSignal } from '../../entities/trading-signal.entity';
-import { TradingLog } from '../../entities/trading-log.entity';
-import { Mt5Connection } from '../../entities/mt5-connection.entity';
+import { Trade, TradeSchema } from '../../schemas/trade.schema';
+import { TradingSignal, TradingSignalSchema } from '../../schemas/trading-signal.schema';
+import { TradingLog, TradingLogSchema } from '../../schemas/trading-log.schema';
+import { Mt5Connection, Mt5ConnectionSchema } from '../../schemas/mt5-connection.schema';
 import { Mt5Module } from '../mt5/mt5.module';
 import { IctStrategyModule } from '../ict-strategy/ict-strategy.module';
 import { OpenAiModule } from '../openai/openai.module';
@@ -14,7 +14,12 @@ import { MoneyManagementModule } from '../money-management/money-management.modu
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Trade, TradingSignal, TradingLog, Mt5Connection]),
+    MongooseModule.forFeature([
+      { name: Trade.name, schema: TradeSchema },
+      { name: TradingSignal.name, schema: TradingSignalSchema },
+      { name: TradingLog.name, schema: TradingLogSchema },
+      { name: Mt5Connection.name, schema: Mt5ConnectionSchema },
+    ]),
     Mt5Module,
     IctStrategyModule,
     OpenAiModule,

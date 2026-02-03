@@ -1,11 +1,10 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
-import { MoneyManagementLevel } from '../../entities/money-management-level.entity';
-import { TradingAccountState } from '../../entities/trading-account-state.entity';
+import { MoneyManagementLevel, MoneyManagementLevelDocument } from '../../schemas/money-management-level.schema';
+import { TradingAccountState, TradingAccountStateDocument } from '../../schemas/trading-account-state.schema';
 import { Mt5Service } from '../mt5/mt5.service';
-import { withRetry } from '../../utils/database.utils';
 
 export interface MoneyLevel {
   level: number;
@@ -48,10 +47,10 @@ export class MoneyManagementService implements OnModuleInit {
 
   constructor(
     private configService: ConfigService,
-    @InjectRepository(MoneyManagementLevel)
-    private levelRepo: Repository<MoneyManagementLevel>,
-    @InjectRepository(TradingAccountState)
-    private accountStateRepo: Repository<TradingAccountState>,
+    @InjectModel(MoneyManagementLevel.name)
+    private levelModel: Model<MoneyManagementLevelDocument>,
+    @InjectModel(TradingAccountState.name)
+    private accountStateModel: Model<TradingAccountStateDocument>,
     private mt5Service: Mt5Service,
   ) {}
 
@@ -64,18 +63,13 @@ export class MoneyManagementService implements OnModuleInit {
    */
   private async initializeLevels(): Promise<void> {
     try {
-      const existingLevels = await withRetry(
-        () => this.levelRepo.find(),
-        { operationName: 'Load money management levels', maxRetries: 3 }
-      );
+      const existingLevels = await this.levelModel.find().exec();
       
       if (existingLevels.length === 0) {
         // Seed default levels
         for (const level of DEFAULT_LEVELS) {
-          await withRetry(
-            () => this.levelRepo.save(this.levelRepo.create(level)),
-            { operationName: 'Save money management level', maxRetries: 3 }
-          );
+          const newLevel = new this.levelModel(level);
+          await newLevel.save();
         }
         this.logger.log('Money management levels initialized');
       } else {
@@ -177,11 +171,8 @@ export class MoneyManagementService implements OnModuleInit {
   /**
    * Get or create account state
    */
-  async getOrCreateAccountState(accountId: string): Promise<TradingAccountState> {
-    let state = await withRetry(
-      () => this.accountStateRepo.findOne({ where: { accountId } }),
-      { operationName: 'Find account state', maxRetries: 3 }
-    );
+  async getOrCreateAccountState(accountId: string): Promise<TradingAccountStateDocument> {
+    let state = await this.accountStateModel.findOne({ accountId }).exec();
     
     if (!state) {
       // Get balance from MT5
@@ -189,7 +180,7 @@ export class MoneyManagementService implements OnModuleInit {
       const balance = accountSummary?.balance || 100;
       const level = this.getCurrentLevel(balance);
       
-      state = this.accountStateRepo.create({
+      state = new this.accountStateModel({
         accountId,
         initialBalance: balance,
         currentBalance: balance,
@@ -204,10 +195,7 @@ export class MoneyManagementService implements OnModuleInit {
         monthStartDate: this.getMonthStartDate(),
       });
       
-      await withRetry(
-        () => this.accountStateRepo.save(state!),
-        { operationName: 'Save account state', maxRetries: 3 }
-      );
+      await state.save();
       this.logger.log(`Created account state for ${accountId} at level ${level.level}`);
     }
     
@@ -221,7 +209,7 @@ export class MoneyManagementService implements OnModuleInit {
     accountId: string,
     profit: number,
     newBalance: number,
-  ): Promise<TradingAccountState> {
+  ): Promise<TradingAccountStateDocument> {
     const state = await this.getOrCreateAccountState(accountId);
     const today = new Date();
     
@@ -263,10 +251,7 @@ export class MoneyManagementService implements OnModuleInit {
     state.weeklyTargetReached = state.weeklyProfit >= newLevel.weeklyTarget;
     state.monthlyTargetReached = state.monthlyProfit >= newLevel.monthlyTarget;
     
-    await withRetry(
-      () => this.accountStateRepo.save(state),
-      { operationName: 'Update account state', maxRetries: 3 }
-    );
+    await state.save();
     
     this.logger.log(
       `Account ${accountId} updated: Balance=$${newBalance}, Level=${newLevel.level}, ` +
@@ -279,7 +264,7 @@ export class MoneyManagementService implements OnModuleInit {
   /**
    * Sync account state with MT5
    */
-  async syncWithMt5(accountId: string): Promise<TradingAccountState> {
+  async syncWithMt5(accountId: string): Promise<TradingAccountStateDocument> {
     const accountSummary = await this.mt5Service.getAccountSummary();
     
     if (!accountSummary) {
@@ -301,7 +286,7 @@ export class MoneyManagementService implements OnModuleInit {
    * Check if should stop trading for the day (target reached)
    * NOTE: Temporarily disabled for testing - always returns false
    */
-  shouldStopTradingToday(state: TradingAccountState): { stop: boolean; reason: string } {
+  shouldStopTradingToday(state: TradingAccountStateDocument): { stop: boolean; reason: string } {
     // DISABLED FOR TESTING - uncomment below to re-enable daily limits
     return { stop: false, reason: '' };
     
@@ -330,7 +315,7 @@ export class MoneyManagementService implements OnModuleInit {
    * Get comprehensive money management status
    */
   async getMoneyManagementStatus(accountId: string): Promise<{
-    accountState: TradingAccountState;
+    accountState: TradingAccountStateDocument;
     currentLevel: MoneyLevel;
     nextLevel: MoneyLevel | null;
     progressToNextLevel: number;

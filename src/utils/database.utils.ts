@@ -1,11 +1,11 @@
 import { Logger } from '@nestjs/common';
-import { DataSource, QueryRunner } from 'typeorm';
 
 const logger = new Logger('DatabaseUtils');
 
 /**
  * Retry a database operation with exponential backoff
  * Useful for handling transient connection issues in serverless environments
+ * Note: MongoDB/Mongoose handles most retries internally, but this can be used for custom retry logic
  */
 export async function withRetry<T>(
   operation: () => Promise<T>,
@@ -76,23 +76,10 @@ export function isRetryableError(error: any): boolean {
     'etimedout',
     'socket hang up',
     'network error',
-    'too many clients',
-    'remaining connection slots',
-    'connection pool',
-    'cannot acquire',
-    'query_wait_timeout',
-    'idle_in_transaction_session_timeout',
-    'statement_timeout',
-    'lock_timeout',
-    'timeout exceeded', // pg-pool connection timeout
-    'connect etimedout',
-    'connection refused',
-    'current transaction is aborted', // PostgreSQL aborted transaction - need fresh connection
-    'query read timeout',
-    'maxclientsinsessionmode', // Supabase PgBouncer Session Mode limit
-    'max clients reached',
-    'pool_size',
-    'session mode',
+    'topology was destroyed',
+    'serverselectionerror',
+    'pool destroyed',
+    'connection closed',
   ];
 
   // Check message patterns
@@ -110,10 +97,10 @@ export function isRetryableError(error: any): boolean {
     '08001', // sqlclient_unable_to_establish_sqlconnection
     '08004', // sqlserver_rejected_establishment_of_sqlconnection
     '57p01', // admin_shutdown
-    '57p02', // crash_shutdown
-    '57p03', // cannot_connect_now
-    '53300', // too_many_connections
-    '53400', // configuration_limit_exceeded
+    // MongoDB error codes
+    '11600', // InterruptedAtShutdown
+    '11601', // Interrupted
+    '11602', // InterruptedDueToReplStateChange
   ];
 
   if (retryableCodes.includes(code)) {
@@ -128,64 +115,4 @@ export function isRetryableError(error: any): boolean {
  */
 export function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-/**
- * Check if database connection is healthy
- */
-export async function isConnectionHealthy(dataSource: DataSource): Promise<boolean> {
-  try {
-    if (!dataSource.isInitialized) {
-      return false;
-    }
-    
-    // Run a simple query to check connection
-    await dataSource.query('SELECT 1');
-    return true;
-  } catch (error) {
-    logger.warn('Database health check failed:', error.message);
-    return false;
-  }
-}
-
-/**
- * Ensure database connection is ready, attempt to reconnect if needed
- */
-export async function ensureConnection(dataSource: DataSource): Promise<void> {
-  if (!dataSource.isInitialized) {
-    logger.log('Initializing database connection...');
-    await dataSource.initialize();
-    return;
-  }
-
-  // Check if connection is healthy
-  const healthy = await isConnectionHealthy(dataSource);
-  
-  if (!healthy) {
-    logger.warn('Database connection unhealthy, attempting to reconnect...');
-    try {
-      await dataSource.destroy();
-    } catch (error) {
-      // Ignore destroy errors
-    }
-    await dataSource.initialize();
-    logger.log('Database reconnected successfully');
-  }
-}
-
-/**
- * Execute a database operation with connection health check
- */
-export async function withConnection<T>(
-  dataSource: DataSource,
-  operation: () => Promise<T>,
-  operationName?: string,
-): Promise<T> {
-  return withRetry(
-    async () => {
-      await ensureConnection(dataSource);
-      return operation();
-    },
-    { operationName },
-  );
 }

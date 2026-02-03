@@ -1,13 +1,14 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { TradingService } from './trading.service';
 import { Mt5Service } from '../mt5/mt5.service';
-import { TradingEventType } from '../../entities/trading-log.entity';
-import { Trade } from '../../entities/trade.entity';
-import { Mt5Connection } from '../../entities/mt5-connection.entity';
+import { TradingEventType } from '../../schemas/trading-log.schema';
+import { Trade, TradeDocument } from '../../schemas/trade.schema';
+import { Mt5Connection, Mt5ConnectionDocument } from '../../schemas/mt5-connection.schema';
+import { TradingSignalDocument } from '../../schemas/trading-signal.schema';
 
 @Injectable()
 export class AutoTradingService implements OnModuleInit {
@@ -20,8 +21,8 @@ export class AutoTradingService implements OnModuleInit {
     private configService: ConfigService,
     private tradingService: TradingService,
     private mt5Service: Mt5Service,
-    @InjectRepository(Mt5Connection)
-    private mt5ConnectionRepo: Repository<Mt5Connection>,
+    @InjectModel(Mt5Connection.name)
+    private mt5ConnectionModel: Model<Mt5ConnectionDocument>,
   ) {
     // Initialize from environment variable
     this.isEnabled = this.configService.get('AUTO_TRADING_ENABLED', 'true') === 'true';
@@ -84,9 +85,9 @@ export class AutoTradingService implements OnModuleInit {
    * Ensure MT5 connection is active for a specific account
    * Loads credentials from database, connects, and updates token
    */
-  private async ensureMt5ConnectionForAccount(connection: Mt5Connection): Promise<void> {
+  private async ensureMt5ConnectionForAccount(connection: Mt5ConnectionDocument): Promise<void> {
     try {
-      if (!connection.user || !connection.password || !connection.host) {
+      if (!connection.user || !(connection as any).password || !connection.host) {
         throw new Error(`Incomplete MT5 credentials for account ${connection.user}`);
       }
 
@@ -95,7 +96,7 @@ export class AutoTradingService implements OnModuleInit {
       // Set credentials in MT5 service
       await this.mt5Service.setCredentials(
         connection.user,
-        connection.password,
+        (connection as any).password,
         connection.host,
         connection.port?.toString() || '443',
       );
@@ -122,10 +123,10 @@ export class AutoTradingService implements OnModuleInit {
       const newToken = await this.mt5Service.connect();
 
       // Update token in database
-      connection.token = newToken;
-      connection.isConnected = true;
-      connection.lastConnectedAt = new Date();
-      await this.mt5ConnectionRepo.save(connection);
+      await this.mt5ConnectionModel.updateOne(
+        { _id: (connection as any)._id },
+        { token: newToken, isConnected: true, lastConnectedAt: new Date() }
+      );
 
       this.logger.log(`✅ MT5 reconnected and token updated for account ${connection.user}`);
 
@@ -139,10 +140,7 @@ export class AutoTradingService implements OnModuleInit {
    * Legacy method for backward compatibility - uses most recent account
    */
   private async ensureMt5Connection(): Promise<void> {
-    const connection = await this.mt5ConnectionRepo.findOne({
-      where: {},
-      order: { updatedAt: 'DESC' },
-    });
+    const connection = await this.mt5ConnectionModel.findOne({}).sort({ updatedAt: -1 }).exec();
 
     if (!connection) {
       throw new Error('No MT5 credentials found in database. Please login from the app first.');
@@ -154,13 +152,11 @@ export class AutoTradingService implements OnModuleInit {
   /**
    * Get all active MT5 accounts from database
    */
-  private async getAllActiveAccounts(): Promise<Mt5Connection[]> {
-    const connections = await this.mt5ConnectionRepo.find({
-      order: { updatedAt: 'DESC' },
-    });
+  private async getAllActiveAccounts(): Promise<Mt5ConnectionDocument[]> {
+    const connections = await this.mt5ConnectionModel.find().sort({ updatedAt: -1 }).exec();
     
     // Filter out connections with incomplete credentials
-    return connections.filter(c => c.user && c.password && c.host);
+    return connections.filter(c => c.user && (c as any).password && c.host);
   }
 
   /**
@@ -338,7 +334,7 @@ export class AutoTradingService implements OnModuleInit {
           this.logger.log(`📊 [${account.user}] Signal: ${signal.signalType} | Confidence: ${signal.confidence}%`);
 
           accountResult.signal = {
-            id: signal.id,
+            id: (signal as any)._id?.toString(),
             type: signal.signalType,
             strength: signal.strength,
             confidence: signal.confidence,
@@ -349,7 +345,7 @@ export class AutoTradingService implements OnModuleInit {
 
           // Execute trade if signal is actionable
           const minConfidenceForTrade = this.scalpingMode ? 20 : 30;
-          let trade: Trade | null = null;
+          let trade: TradeDocument | null = null;
           
           if (signal.signalType !== 'HOLD' && signal.confidence >= minConfidenceForTrade) {
             trade = await this.tradingService.executeTrade(signal);
@@ -357,7 +353,7 @@ export class AutoTradingService implements OnModuleInit {
             if (trade) {
               this.logger.log(`✅ [${account.user}] Trade executed: ${trade.direction} @ ${trade.entryPrice}`);
               accountResult.trade = {
-                id: trade.id,
+                id: (trade as any)._id?.toString(),
                 direction: trade.direction,
                 entryPrice: trade.entryPrice,
                 lotSize: trade.lotSize,
