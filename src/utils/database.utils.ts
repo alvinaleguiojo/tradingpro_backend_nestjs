@@ -84,6 +84,9 @@ export function isRetryableError(error: any): boolean {
     'idle_in_transaction_session_timeout',
     'statement_timeout',
     'lock_timeout',
+    'timeout exceeded', // pg-pool connection timeout
+    'connect etimedout',
+    'connection refused',
     'maxclientsinsessionmode', // Supabase PgBouncer Session Mode limit
     'max clients reached',
     'pool_size',

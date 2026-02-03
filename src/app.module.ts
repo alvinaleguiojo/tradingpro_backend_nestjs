@@ -44,12 +44,12 @@ import { HealthController } from './health.controller';
           // IMPORTANT: Use port 6543 (pooler) not 5432 (direct)
           extra: {
             // Minimal pool for serverless - let PgBouncer handle pooling
-            max: 1, // Only 1 connection per function instance
+            max: 2, // Allow 2 connections per function instance for parallel queries
             min: 0, // No minimum, create on demand
             
             // Aggressive connection release for serverless
-            idleTimeoutMillis: 1000, // Release idle connections after 1 second
-            connectionTimeoutMillis: 5000, // 5 second connection timeout (fail fast)
+            idleTimeoutMillis: 3000, // Release idle connections after 3 seconds
+            connectionTimeoutMillis: 10000, // 10 second connection timeout (more time for cold starts)
             
             // Query timeouts
             statement_timeout: 25000, // 25 second query timeout
@@ -59,10 +59,10 @@ import { HealthController } from './health.controller';
             allowExitOnIdle: true,
             
             // Acquire timeout - how long to wait for a connection
-            acquireTimeoutMillis: 10000, // 10 seconds to acquire connection
+            acquireTimeoutMillis: 15000, // 15 seconds to acquire connection
             
             // Create timeout for new connections
-            createTimeoutMillis: 5000, // 5 seconds to create connection
+            createTimeoutMillis: 10000, // 10 seconds to create connection
             
             // Destroy timeout for closing connections
             destroyTimeoutMillis: 3000, // 3 seconds to destroy connection

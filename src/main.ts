@@ -1,7 +1,20 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+
+// Global error handlers to prevent process crashes in serverless
+process.on('unhandledRejection', (reason, promise) => {
+  const logger = new Logger('UnhandledRejection');
+  logger.error(`Unhandled Rejection: ${reason}`);
+  // Don't exit - let the request fail gracefully
+});
+
+process.on('uncaughtException', (error) => {
+  const logger = new Logger('UncaughtException');
+  logger.error(`Uncaught Exception: ${error.message}`, error.stack);
+  // Don't exit - let the request fail gracefully
+});
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
