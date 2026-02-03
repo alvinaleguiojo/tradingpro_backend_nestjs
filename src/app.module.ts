@@ -43,8 +43,8 @@ import { HealthController } from './health.controller';
           // Transaction mode allows many more concurrent connections
           // IMPORTANT: Use port 6543 (pooler) not 5432 (direct)
           extra: {
-            // Minimal pool for serverless - let PgBouncer handle pooling
-            max: 2, // Allow 2 connections per function instance for parallel queries
+            // Single connection per function to avoid transaction conflicts
+            max: 1, // Only 1 connection per function instance
             min: 0, // No minimum, create on demand
             
             // Aggressive connection release for serverless

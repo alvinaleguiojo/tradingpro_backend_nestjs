@@ -87,6 +87,8 @@ export function isRetryableError(error: any): boolean {
     'timeout exceeded', // pg-pool connection timeout
     'connect etimedout',
     'connection refused',
+    'current transaction is aborted', // PostgreSQL aborted transaction - need fresh connection
+    'query read timeout',
     'maxclientsinsessionmode', // Supabase PgBouncer Session Mode limit
     'max clients reached',
     'pool_size',
