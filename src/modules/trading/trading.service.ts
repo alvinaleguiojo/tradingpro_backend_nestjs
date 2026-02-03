@@ -522,6 +522,29 @@ export class TradingService implements OnModuleInit {
         return null;
       }
 
+      // Some brokers don't accept SL/TP in the initial order
+      // Try to modify the order to set SL/TP if they weren't applied
+      if (orderResult.order && signal.stopLoss && signal.takeProfit) {
+        try {
+          // Wait a moment for the order to be fully processed
+          await new Promise(resolve => setTimeout(resolve, 500));
+          
+          const modifyResult = await this.mt5Service.modifyOrder({
+            ticket: orderResult.order,
+            stopLoss: signal.stopLoss,
+            takeProfit: signal.takeProfit,
+          });
+          
+          if (modifyResult) {
+            this.logger.log(`✅ SL/TP set on order ${orderResult.order}: SL=${signal.stopLoss}, TP=${signal.takeProfit}`);
+          } else {
+            this.logger.warn(`⚠️ Could not set SL/TP on order ${orderResult.order}`);
+          }
+        } catch (modifyError) {
+          this.logger.warn(`⚠️ Failed to modify order ${orderResult.order} for SL/TP: ${modifyError.message}`);
+        }
+      }
+
       // Create trade record
       const trade = new this.tradeModel({
         mt5Ticket: orderResult.order,
