@@ -1,5 +1,6 @@
 import { Controller, Get, Post, Query, Body, Param, Headers } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery, ApiBody } from '@nestjs/swagger';
+import { ConfigService } from '@nestjs/config';
 import { TradingService } from './trading.service';
 import { AutoTradingService } from './auto-trading.service';
 import { KillZoneService } from '../ict-strategy/services/kill-zone.service';
@@ -17,6 +18,7 @@ export class TradingController {
     private readonly scalpingStrategy: ScalpingStrategyService,
     private readonly mt5Service: Mt5Service,
     private readonly moneyManagementService: MoneyManagementService,
+    private readonly configService: ConfigService,
   ) {}
 
   /**
@@ -28,6 +30,7 @@ export class TradingController {
   @ApiQuery({ name: 'signalLimit', required: false, example: 10 })
   async getDashboard(@Query('signalLimit') signalLimit: number = 10) {
     const startTime = Date.now();
+    const accountId = this.configService.get('MT5_USER', 'default');
     
     // Fetch all data in parallel with individual error handling
     const [
@@ -45,17 +48,28 @@ export class TradingController {
         enabled: this.tradingService.isScalpingMode(),
         config: this.scalpingStrategy.getConfig(),
       }),
-      // MT5 status - may be slow, add timeout
-      this.mt5Service.getStatus().catch(err => ({ 
-        isConnected: false, 
-        error: err.message,
-        account: null,
-      })),
-      // Database queries - may be slow
-      this.moneyManagementService.getStatus().catch(err => ({ 
+      // MT5 status - inline the logic from controller
+      (async () => {
+        try {
+          const hasCredentials = this.mt5Service.hasCredentials();
+          if (!hasCredentials) {
+            return { isConnected: false, hasCredentials: false };
+          }
+          const accountSummary = await this.mt5Service.getAccountSummary();
+          return {
+            isConnected: !!accountSummary,
+            hasCredentials: true,
+            balance: accountSummary?.balance || null,
+            equity: accountSummary?.equity || null,
+          };
+        } catch (err) {
+          return { isConnected: false, error: err.message };
+        }
+      })(),
+      // Money management status
+      this.moneyManagementService.getMoneyManagementStatus(accountId).catch(err => ({ 
         error: err.message,
         currentLevel: null,
-        levels: [],
       })),
       this.tradingService.getTradeStats().catch(err => ({
         error: err.message,
