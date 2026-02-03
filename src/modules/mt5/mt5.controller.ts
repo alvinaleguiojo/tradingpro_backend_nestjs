@@ -177,6 +177,32 @@ export class Mt5Controller {
     };
   }
 
+  @Post('refresh')
+  @ApiOperation({ summary: 'Force refresh MT5 connection token' })
+  async refreshConnection() {
+    try {
+      // Force reconnect by clearing token and reconnecting
+      await this.mt5Service.forceReconnect();
+      const accountSummary = await this.mt5Service.getAccountSummary();
+      
+      return {
+        success: true,
+        message: 'MT5 connection refreshed successfully',
+        data: {
+          connected: !!accountSummary,
+          balance: accountSummary?.balance || null,
+          equity: accountSummary?.equity || null,
+        },
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        message: `Failed to refresh connection: ${error.message}`,
+        error: error.message,
+      };
+    }
+  }
+
   @Get('trade-history')
   @ApiOperation({ summary: 'Get closed trade history' })
   @ApiQuery({ name: 'days', required: false, example: 30 })

@@ -274,6 +274,23 @@ export class Mt5Service implements OnModuleInit {
     }
   }
 
+  /**
+   * Force reconnect - clears existing token and reconnects
+   * Use this when the token has expired
+   */
+  async forceReconnect(): Promise<string> {
+    this.logger.log('Force reconnecting to MT5...');
+    
+    // Try to load credentials from database first (for serverless)
+    await this.loadCredentialsFromDb();
+    
+    // Clear existing token
+    this.token = null;
+    
+    // Reconnect
+    return this.connect();
+  }
+
   async disconnect(): Promise<void> {
     if (!this.token) return;
 
@@ -290,6 +307,8 @@ export class Mt5Service implements OnModuleInit {
 
   async checkConnection(): Promise<boolean> {
     if (!this.token) {
+      // Try to load from DB first (serverless persistence)
+      await this.loadCredentialsFromDb();
       await this.connect();
       return !!this.token;
     }
