@@ -488,11 +488,10 @@ export class Mt5Service implements OnModuleInit {
 
       const tf = tfMap[timeframe] || 15;
 
-      // Use PriceHistoryToday for short-term data (more reliable for scalping)
-      // Fall back to PriceHistoryMonth if not enough data
+      // Use PriceHistoryToday for live data - PriceHistoryMonth returns stale historical data
       let rawBars: any[] = [];
       
-      // First try today's data
+      // Get today's live data
       try {
         const todayResponse = await this.axiosClient.get('/PriceHistoryToday', {
           params: { 
@@ -502,36 +501,23 @@ export class Mt5Service implements OnModuleInit {
           },
         });
         rawBars = Array.isArray(todayResponse.data) ? todayResponse.data : [];
-        this.logger.log(`PriceHistoryToday returned ${rawBars.length} candles`);
+        this.logger.log(`PriceHistoryToday returned ${rawBars.length} candles for ${symbol} ${timeframe}`);
       } catch (e) {
-        this.logger.warn('PriceHistoryToday failed, trying PriceHistoryMonth');
+        this.logger.warn(`PriceHistoryToday failed for ${symbol}: ${e.message}`);
       }
 
-      // If not enough data from today, get monthly data
-      if (rawBars.length < count) {
-        const monthResponse = await this.axiosClient.get('/PriceHistoryMonth', {
-          params: { 
-            id: this.token, 
-            symbol, 
-            timeframe: tf,
-          },
-        });
-        const monthBars = Array.isArray(monthResponse.data) ? monthResponse.data : [];
-        this.logger.log(`PriceHistoryMonth returned ${monthBars.length} candles`);
-        
-        // Merge: use monthly for history, today for recent
-        if (monthBars.length > rawBars.length) {
-          rawBars = monthBars;
-        }
-      }
-
+      // If today's data is empty, log error (PriceHistoryMonth has stale 2022 data, don't use it)
       if (rawBars.length === 0) {
-        this.logger.warn(`No price history data received for ${symbol}`);
+        this.logger.warn(`No price history data received for ${symbol} - MT5 may be disconnected`);
         return [];
       }
 
+      // For scalping, we only need 30-50 candles, so today's data is sufficient
+      // Take the last 'count' candles or all if less than count
+      const candlesToUse = rawBars.slice(-Math.min(count, rawBars.length));
+
       // Map MT5 API response (openPrice, highPrice, etc.) to our interface (open, high, etc.)
-      const bars: Mt5Bar[] = rawBars.map((bar: any) => ({
+      const bars: Mt5Bar[] = candlesToUse.map((bar: any) => ({
         time: bar.time,
         open: bar.openPrice ?? bar.open,
         high: bar.highPrice ?? bar.high,

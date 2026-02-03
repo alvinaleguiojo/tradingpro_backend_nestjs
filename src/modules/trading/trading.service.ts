@@ -117,18 +117,22 @@ export class TradingService implements OnModuleInit {
       // Use M5 for scalping mode, otherwise use provided timeframe
       const analysisTimeframe = this.scalpingMode ? 'M5' : timeframe;
       
-      // Get price history from MT5
-      const candles = await this.mt5Service.getPriceHistory(symbol, analysisTimeframe, 200);
+      // Get price history from MT5 - reduced count for scalping (today's data only has ~50-60 candles)
+      const candles = await this.mt5Service.getPriceHistory(symbol, analysisTimeframe, 100);
       
-      if (candles.length < 50) {
+      // Reduced minimum for scalping - we only need 30 candles for pattern detection
+      const minCandles = this.scalpingMode ? 30 : 50;
+      if (candles.length < minCandles) {
         await this.logEvent(
           TradingEventType.MARKET_ANALYSIS,
-          'Insufficient candles for analysis',
-          { symbol, timeframe: analysisTimeframe, candleCount: candles.length },
+          `Insufficient candles for analysis: ${candles.length} (need ${minCandles})`,
+          { symbol, timeframe: analysisTimeframe, candleCount: candles.length, required: minCandles },
           'warn',
         );
         return null;
       }
+
+      this.logger.log(`Analyzing ${candles.length} candles for ${symbol} ${analysisTimeframe}`);
 
       // Convert MT5 candles to our format
       const formattedCandles: Candle[] = candles.map(c => ({
