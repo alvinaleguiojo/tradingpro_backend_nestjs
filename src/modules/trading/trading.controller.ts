@@ -30,13 +30,35 @@ export class TradingController {
   @ApiQuery({ name: 'signalLimit', required: false, example: 10 })
   async getDashboard(@Query('signalLimit') signalLimit: number = 10) {
     const startTime = Date.now();
-    const accountId = this.configService.get('MT5_USER', 'default');
     
-    // Fetch all data in parallel with individual error handling
+    // Get account ID from MT5 service (uses the currently connected account)
+    // Fallback to MT5_USER config or 'default'
+    const accountId = this.mt5Service.getCurrentAccountId() || 
+                      this.configService.get('MT5_USER', 'default');
+    
+    // First fetch MT5 status to get account balance
+    let mt5Status: any = { isConnected: false };
+    try {
+      const hasCredentials = this.mt5Service.hasCredentials();
+      if (hasCredentials) {
+        const accountSummary = await this.mt5Service.getAccountSummary();
+        mt5Status = {
+          isConnected: !!accountSummary,
+          hasCredentials: true,
+          balance: accountSummary?.balance || 0,
+          equity: accountSummary?.equity || 0,
+        };
+      } else {
+        mt5Status = { isConnected: false, hasCredentials: false };
+      }
+    } catch (err) {
+      mt5Status = { isConnected: false, error: err.message };
+    }
+    
+    // Fetch remaining data in parallel with individual error handling
     const [
       tradingStatus,
       scalpingStatus,
-      mt5Status,
       moneyManagementStatus,
       tradeStats,
       recentSignals,
@@ -48,34 +70,28 @@ export class TradingController {
         enabled: this.tradingService.isScalpingMode(),
         config: this.scalpingStrategy.getConfig(),
       }),
-      // MT5 status - inline the logic from controller
-      (async () => {
-        try {
-          const hasCredentials = this.mt5Service.hasCredentials();
-          if (!hasCredentials) {
-            return { isConnected: false, hasCredentials: false };
-          }
-          const accountSummary = await this.mt5Service.getAccountSummary();
-          return {
-            isConnected: !!accountSummary,
-            hasCredentials: true,
-            balance: accountSummary?.balance || null,
-            equity: accountSummary?.equity || null,
-          };
-        } catch (err) {
-          return { isConnected: false, error: err.message };
-        }
-      })(),
-      // Money management status
-      this.moneyManagementService.getMoneyManagementStatus(accountId).catch(err => ({ 
-        error: err.message,
-        currentLevel: null,
-      })),
+      // Money management status - enhanced with MT5 balance
+      this.moneyManagementService.getMoneyManagementStatus(accountId).catch(err => {
+        // Return fallback with MT5 balance if available
+        const balance = mt5Status.balance || 0;
+        return { 
+          error: err.message,
+          currentLevel: { level: balance >= 100 ? 1 : 0, lotSize: 0.01, minBalance: 0, maxBalance: 100, dailyTarget: 1, name: 'Unknown' },
+          accountState: { currentBalance: balance, dailyProfit: 0 },
+          dailyTargetProgress: 0,
+          recommendedLotSize: 0.01,
+          shouldStopTrading: { stop: false, reason: '' },
+        };
+      }),
       this.tradingService.getTradeStats().catch(err => ({
         error: err.message,
         totalTrades: 0,
+        openTrades: 0,
+        closedTrades: 0,
+        winningTrades: 0,
+        losingTrades: 0,
         winRate: 0,
-        profitFactor: 0,
+        totalProfit: 0,
       })),
       this.tradingService.getRecentSignals(signalLimit).catch(() => []),
       this.tradingService.getOpenTrades().catch(() => []),

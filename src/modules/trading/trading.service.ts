@@ -622,7 +622,7 @@ export class TradingService implements OnModuleInit {
   }
 
   /**
-   * Get trade statistics
+   * Get trade statistics - combines database trades with live MT5 data
    */
   async getTradeStats(): Promise<{
     totalTrades: number;
@@ -633,17 +633,38 @@ export class TradingService implements OnModuleInit {
     winRate: number;
     totalProfit: number;
   }> {
-    const trades = await this.tradeRepo.find();
+    // Get trades from database
+    const dbTrades = await this.tradeRepo.find();
     
-    const openTrades = trades.filter(t => t.status === TradeStatus.OPEN);
-    const closedTrades = trades.filter(t => t.status === TradeStatus.CLOSED);
+    // Also get live open trades from MT5 to ensure accuracy
+    let mt5OpenCount = 0;
+    try {
+      const mt5Orders = await this.mt5Service.getOpenedOrders();
+      // Filter to only trading orders (not balance operations)
+      const tradeOrders = mt5Orders.filter(o => 
+        o.symbol && o.symbol.length > 0 && 
+        (o.orderType === 'Buy' || o.orderType === 'Sell' || 
+         o.orderType === 'BuyLimit' || o.orderType === 'SellLimit' ||
+         o.orderType === 'BuyStop' || o.orderType === 'SellStop')
+      );
+      mt5OpenCount = tradeOrders.length;
+    } catch (error) {
+      this.logger.warn('Could not fetch MT5 orders for stats');
+    }
+    
+    const dbOpenTrades = dbTrades.filter(t => t.status === TradeStatus.OPEN);
+    const closedTrades = dbTrades.filter(t => t.status === TradeStatus.CLOSED);
     const winningTrades = closedTrades.filter(t => t.profit > 0);
     const losingTrades = closedTrades.filter(t => t.profit < 0);
     const totalProfit = closedTrades.reduce((sum, t) => sum + Number(t.profit), 0);
+    
+    // Use the higher of DB open trades or MT5 open trades for accuracy
+    const openTradesCount = Math.max(dbOpenTrades.length, mt5OpenCount);
+    const totalTradesCount = openTradesCount + closedTrades.length;
 
     return {
-      totalTrades: trades.length,
-      openTrades: openTrades.length,
+      totalTrades: totalTradesCount,
+      openTrades: openTradesCount,
       closedTrades: closedTrades.length,
       winningTrades: winningTrades.length,
       losingTrades: losingTrades.length,
