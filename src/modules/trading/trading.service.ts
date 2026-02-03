@@ -472,19 +472,12 @@ export class TradingService implements OnModuleInit {
         `LotSize ${lotSize}, Daily Target Progress: ${mmStatus.dailyTargetProgress.toFixed(1)}%`
       );
 
-      // Check max positions - in scalping mode, only allow 1 position at a time
-      const defaultMaxPositions = this.scalpingMode ? '1' : '3';
-      const maxPositions = parseInt(this.configService.get('TRADING_MAX_POSITIONS', defaultMaxPositions));
-      const openOrders = await this.mt5Service.getOpenedOrdersForSymbol(signal.symbol);
+      // Check max positions - each account should only have 1 open position at a time
+      const maxPositions = 1;
+      const allOpenOrders = await this.mt5Service.getOpenedOrders();
       
-      if (openOrders.length >= maxPositions) {
-        this.logger.log(`Max positions reached for ${signal.symbol}: ${openOrders.length}/${maxPositions}`);
-        return null;
-      }
-
-      // Extra check: In scalping mode, don't open if ANY position exists on this symbol
-      if (this.scalpingMode && openOrders.length > 0) {
-        this.logger.log(`Scalping mode: Already have ${openOrders.length} position(s) on ${signal.symbol}, waiting for close`);
+      if (allOpenOrders.length >= maxPositions) {
+        this.logger.log(`Max positions reached for account: ${allOpenOrders.length}/${maxPositions} (limit 1 per account)`);
         return null;
       }
 
