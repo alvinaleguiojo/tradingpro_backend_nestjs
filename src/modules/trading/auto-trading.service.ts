@@ -93,23 +93,25 @@ export class AutoTradingService implements OnModuleInit {
 
       this.logger.log(`Loading MT5 credentials for account ${connection.user} from database`);
 
-      // Set credentials in MT5 service
-      await this.mt5Service.setCredentials(
-        connection.user,
-        (connection as any).password,
-        connection.host,
-        connection.port?.toString() || '443',
-      );
-
       // Check if existing token is still valid
       const tokenAge = connection.lastConnectedAt 
         ? Date.now() - new Date(connection.lastConnectedAt).getTime()
         : Infinity;
       
       const tokenExpired = tokenAge > 25 * 60 * 1000; // Token expires after ~30 min, refresh at 25 min
+      const cachedToken = (connection.token && !tokenExpired) ? connection.token : undefined;
 
-      if (connection.token && !tokenExpired) {
-        // Try to use existing token
+      // Set credentials with cached token if available
+      await this.mt5Service.setCredentialsWithToken(
+        connection.user,
+        (connection as any).password,
+        connection.host,
+        connection.port?.toString() || '443',
+        cachedToken as string | undefined,
+      );
+
+      if (cachedToken) {
+        // Try to validate the cached token
         this.logger.log(`Using cached token for ${connection.user} (age: ${Math.round(tokenAge / 1000)}s)`);
         const isValid = await this.mt5Service.checkConnection();
         if (isValid) {
@@ -118,7 +120,7 @@ export class AutoTradingService implements OnModuleInit {
         }
       }
 
-      // Token expired or invalid, reconnect
+      // Token expired, invalid, or not available - reconnect
       this.logger.log(`Token expired or invalid for ${connection.user}, reconnecting...`);
       const newToken = await this.mt5Service.connect();
 

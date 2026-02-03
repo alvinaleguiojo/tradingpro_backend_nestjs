@@ -166,6 +166,29 @@ export class Mt5Service implements OnModuleInit {
   }
 
   /**
+   * Set credentials and optionally a cached token for a specific account
+   * Used by auto-trading to switch between accounts efficiently
+   */
+  async setCredentialsWithToken(
+    user: string, 
+    password: string, 
+    host: string, 
+    port: string = '443',
+    cachedToken?: string,
+  ): Promise<void> {
+    this.dynamicCredentials = { user, password, host, port };
+    
+    // If a cached token is provided and valid, use it
+    if (cachedToken && this.isValidToken(cachedToken)) {
+      this.token = cachedToken;
+      this.logger.log(`MT5 credentials set for account ${user} with cached token`);
+    } else {
+      this.token = null; // Reset token to force reconnection
+      this.logger.log(`MT5 credentials set for account ${user} (no cached token)`);
+    }
+  }
+
+  /**
    * Get all MT5 accounts stored in database
    */
   async getAllAccounts(): Promise<any[]> {
