@@ -187,7 +187,6 @@ export class AutoTradingService implements OnModuleInit {
 
       this.logger.log(`🔄 Running trading cycle for ${accounts.length} account(s)`);
 
-      const symbol = this.configService.get('TRADING_SYMBOL', 'XAUUSDm');
       const timeframe = this.configService.get('TRADING_TIMEFRAME', 'M15');
 
       // Run trading cycle for each account
@@ -197,6 +196,11 @@ export class AutoTradingService implements OnModuleInit {
           
           // Connect to this account
           await this.ensureMt5ConnectionForAccount(account);
+
+          // Detect the correct Gold symbol for this broker dynamically
+          const configuredSymbol = this.configService.get('TRADING_SYMBOL', 'XAUUSD');
+          const symbol = await this.mt5Service.getTradingSymbol(configuredSymbol);
+          this.logger.log(`📈 Using trading symbol: ${symbol}`);
 
           await this.tradingService.logEvent(
             TradingEventType.CRON_EXECUTION,
@@ -295,7 +299,6 @@ export class AutoTradingService implements OnModuleInit {
 
       this.logger.log(`🔄 Running trading cycle for ${accounts.length} account(s)`);
 
-      const symbol = this.configService.get('TRADING_SYMBOL', 'XAUUSDm');
       const timeframe = this.configService.get('TRADING_TIMEFRAME', 'M15');
 
       // Process each account
@@ -314,6 +317,10 @@ export class AutoTradingService implements OnModuleInit {
           // Connect to this account
           await this.ensureMt5ConnectionForAccount(account);
 
+          // Detect the correct Gold symbol for this broker dynamically
+          const configuredSymbol = this.configService.get('TRADING_SYMBOL', 'XAUUSD');
+          const symbol = await this.mt5Service.getTradingSymbol(configuredSymbol);
+          this.logger.log(`📈 Using trading symbol: ${symbol}`);
           await this.tradingService.logEvent(
             TradingEventType.CRON_EXECUTION,
             `Trading cycle for ${symbol} - Account: ${account.user}`,
@@ -469,10 +476,20 @@ export class AutoTradingService implements OnModuleInit {
       nextRun.setHours(nextRun.getHours() + 1);
     }
 
+    // Get dynamic symbol for display
+    const configuredSymbol = this.configService.get('TRADING_SYMBOL', 'XAUUSD');
+    let detectedSymbol = configuredSymbol;
+    try {
+      detectedSymbol = await this.mt5Service.getTradingSymbol(configuredSymbol);
+    } catch (e) {
+      // Use configured symbol if detection fails
+    }
+
     return {
       enabled: this.isEnabled,
       running: this.isRunning,
-      symbol: this.configService.get('TRADING_SYMBOL', 'XAUUSDm'),
+      symbol: detectedSymbol,
+      configuredSymbol: configuredSymbol,
       timeframe: this.configService.get('TRADING_TIMEFRAME', 'M15'),
       nextRun: nextRun.toISOString(),
     };

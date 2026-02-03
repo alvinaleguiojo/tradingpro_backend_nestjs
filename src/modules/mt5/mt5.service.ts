@@ -1132,4 +1132,52 @@ export class Mt5Service implements OnModuleInit {
       dbConnection,
     };
   }
+
+  /**
+   * Detect the correct Gold/XAU symbol for this broker
+   * Different brokers use different symbol names: XAUUSDm, XAUUSD, GOLD, XAU/USD, etc.
+   */
+  async detectGoldSymbol(): Promise<string | null> {
+    try {
+      await this.checkConnection();
+      
+      // Common Gold symbol patterns to search for
+      const goldPatterns = ['XAU', 'GOLD'];
+      
+      for (const pattern of goldPatterns) {
+        const symbols = await this.getSymbolList(pattern);
+        
+        if (symbols.length > 0) {
+          // Prioritize symbols that look like Gold vs USD
+          const usdSymbol = symbols.find((s: string) => 
+            s.toUpperCase().includes('USD') || 
+            s.toUpperCase().includes('GOLD')
+          );
+          
+          if (usdSymbol) {
+            this.logger.log(`✅ Detected Gold symbol: ${usdSymbol}`);
+            return usdSymbol;
+          }
+          
+          // Return first match if no USD-specific one found
+          this.logger.log(`✅ Detected Gold symbol: ${symbols[0]}`);
+          return symbols[0];
+        }
+      }
+      
+      this.logger.warn('⚠️ Could not detect Gold symbol for this broker');
+      return null;
+    } catch (error) {
+      this.logger.error('Failed to detect Gold symbol', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get the trading symbol - tries to detect dynamically, falls back to configured value
+   */
+  async getTradingSymbol(defaultSymbol: string = 'XAUUSD'): Promise<string> {
+    const detectedSymbol = await this.detectGoldSymbol();
+    return detectedSymbol || defaultSymbol;
+  }
 }
