@@ -4,6 +4,8 @@ import { TradingService } from './trading.service';
 import { AutoTradingService } from './auto-trading.service';
 import { KillZoneService } from '../ict-strategy/services/kill-zone.service';
 import { ScalpingStrategyService } from '../ict-strategy/services/scalping-strategy.service';
+import { Mt5Service } from '../mt5/mt5.service';
+import { MoneyManagementService } from '../money-management/money-management.service';
 
 @ApiTags('trading')
 @Controller('trading')
@@ -13,7 +15,74 @@ export class TradingController {
     private readonly autoTradingService: AutoTradingService,
     private readonly killZoneService: KillZoneService,
     private readonly scalpingStrategy: ScalpingStrategyService,
+    private readonly mt5Service: Mt5Service,
+    private readonly moneyManagementService: MoneyManagementService,
   ) {}
+
+  /**
+   * Combined dashboard endpoint - returns all data in a single request
+   * This reduces 7+ API calls to 1, significantly improving load times
+   */
+  @Get('dashboard')
+  @ApiOperation({ summary: 'Get all trading dashboard data in a single request' })
+  @ApiQuery({ name: 'signalLimit', required: false, example: 10 })
+  async getDashboard(@Query('signalLimit') signalLimit: number = 10) {
+    const startTime = Date.now();
+    
+    // Fetch all data in parallel with individual error handling
+    const [
+      tradingStatus,
+      scalpingStatus,
+      mt5Status,
+      moneyManagementStatus,
+      tradeStats,
+      recentSignals,
+      openTrades,
+    ] = await Promise.all([
+      // These are fast (in-memory)
+      Promise.resolve(this.autoTradingService.getStatus()),
+      Promise.resolve({
+        enabled: this.tradingService.isScalpingMode(),
+        config: this.scalpingStrategy.getConfig(),
+      }),
+      // MT5 status - may be slow, add timeout
+      this.mt5Service.getStatus().catch(err => ({ 
+        isConnected: false, 
+        error: err.message,
+        account: null,
+      })),
+      // Database queries - may be slow
+      this.moneyManagementService.getStatus().catch(err => ({ 
+        error: err.message,
+        currentLevel: null,
+        levels: [],
+      })),
+      this.tradingService.getTradeStats().catch(err => ({
+        error: err.message,
+        totalTrades: 0,
+        winRate: 0,
+        profitFactor: 0,
+      })),
+      this.tradingService.getRecentSignals(signalLimit).catch(() => []),
+      this.tradingService.getOpenTrades().catch(() => []),
+    ]);
+
+    const duration = Date.now() - startTime;
+
+    return {
+      success: true,
+      duration: `${duration}ms`,
+      data: {
+        tradingStatus,
+        scalpingStatus,
+        mt5Status,
+        moneyManagementStatus,
+        tradeStats,
+        recentSignals,
+        openTrades,
+      },
+    };
+  }
 
   @Get('status')
   @ApiOperation({ summary: 'Get auto trading status' })

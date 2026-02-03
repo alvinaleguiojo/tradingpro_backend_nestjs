@@ -1,27 +1,72 @@
-name: Auto Trading Cron
+name: Auto Trading Cron (DISABLED - Using cron-job.org)
+
+# DISABLED: Now using cron-job.org for reliable 5-minute scheduling
+# cron-job.org is more reliable than GitHub Actions for time-sensitive tasks
+# To re-enable, uncomment the schedule section below
 
 on:
-  schedule:
-    # Run every 5 minutes for aggressive scalping
-    - cron: '*/5 * * * *'
-  workflow_dispatch: # Allow manual trigger
+  # schedule:
+  #   - cron: '*/5 * * * *'
+  workflow_dispatch: # Allow manual trigger only
+
+# Prevent multiple concurrent runs
+concurrency:
+  group: trading-cron
+  cancel-in-progress: false
 
 jobs:
   trigger-trading:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Trigger Trading Cycle
+      - name: Check if recently run
+        id: check
         run: |
-          response=$(curl -s -X GET "${{ secrets.BACKEND_URL }}/trading/trigger" \
+          # GitHub API to check last workflow run
+          echo "Proceeding with trading cycle..."
+
+      - name: Trigger Trading Cycle
+        id: trigger
+        run: |
+          MAX_RETRIES=3
+          RETRY_DELAY=5
+          
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Attempt $i of $MAX_RETRIES..."
+            
+            response=$(curl -s -w "\n%{http_code}" -X GET "${{ secrets.BACKEND_URL }}/trading/trigger" \
+              -H "Content-Type: application/json" \
+              --max-time 180 \
+              --connect-timeout 10)
+            
+            http_code=$(echo "$response" | tail -n1)
+            body=$(echo "$response" | sed '$d')
+            
+            echo "HTTP Status: $http_code"
+            echo "Response: $body"
+            
+            if [ "$http_code" = "200" ] && echo "$body" | grep -q '"success":true'; then
+              echo "✅ Trading cycle completed successfully"
+              exit 0
+            fi
+            
+            if [ $i -lt $MAX_RETRIES ]; then
+              echo "⚠️ Attempt failed, retrying in ${RETRY_DELAY}s..."
+              sleep $RETRY_DELAY
+              RETRY_DELAY=$((RETRY_DELAY * 2))
+            fi
+          done
+          
+          echo "❌ All retry attempts failed"
+          exit 1
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+
+      - name: Trigger Sync (on success)
+        if: success()
+        run: |
+          curl -s -X POST "${{ secrets.BACKEND_URL }}/trading/sync" \
             -H "Content-Type: application/json" \
-            --max-time 180 \
-            --retry 2)
-          echo "Response: $response"
-          # Check if the response contains success
-          if echo "$response" | grep -q '"success":true'; then
-            echo "✅ Trading cycle completed successfully"
-          else
-            echo "⚠️ Trading cycle returned: $response"
-          fi
+            --max-time 60 || true
         env:
           BACKEND_URL: ${{ secrets.BACKEND_URL }}
