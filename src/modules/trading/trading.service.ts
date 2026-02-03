@@ -524,24 +524,49 @@ export class TradingService implements OnModuleInit {
 
       // Some brokers don't accept SL/TP in the initial order
       // Try to modify the order to set SL/TP if they weren't applied
-      if (orderResult.order && signal.stopLoss && signal.takeProfit) {
+      if (signal.stopLoss && signal.takeProfit) {
         try {
-          // Wait a moment for the order to be fully processed
-          await new Promise(resolve => setTimeout(resolve, 500));
+          // Wait for the order to be fully processed
+          await new Promise(resolve => setTimeout(resolve, 1000));
           
-          const modifyResult = await this.mt5Service.modifyOrder({
-            ticket: orderResult.order,
-            stopLoss: signal.stopLoss,
-            takeProfit: signal.takeProfit,
-          });
+          // Get the ticket from the order result, or find it from open orders
+          let ticketToModify = orderResult.order;
           
-          if (modifyResult) {
-            this.logger.log(`✅ SL/TP set on order ${orderResult.order}: SL=${signal.stopLoss}, TP=${signal.takeProfit}`);
+          if (!ticketToModify) {
+            // Order ticket not returned, find the most recent order for this symbol
+            const openOrders = await this.mt5Service.getOpenedOrdersForSymbol(signal.symbol);
+            if (openOrders.length > 0) {
+              // Get the most recent order (should be the one we just opened)
+              const latestOrder = openOrders.sort((a, b) => 
+                new Date(b.openTime).getTime() - new Date(a.openTime).getTime()
+              )[0];
+              ticketToModify = latestOrder.ticket?.toString();
+              this.logger.log(`📋 Found order ticket from open orders: ${ticketToModify}`);
+            }
+          }
+          
+          if (ticketToModify) {
+            const modifyResult = await this.mt5Service.modifyOrder({
+              ticket: ticketToModify,
+              stopLoss: signal.stopLoss,
+              takeProfit: signal.takeProfit,
+            });
+            
+            if (modifyResult) {
+              this.logger.log(`✅ SL/TP set on order ${ticketToModify}: SL=${signal.stopLoss}, TP=${signal.takeProfit}`);
+              await this.logEvent(
+                TradingEventType.TRADE_MODIFIED,
+                `SL/TP set: SL=${signal.stopLoss}, TP=${signal.takeProfit}`,
+                { ticket: ticketToModify, stopLoss: signal.stopLoss, takeProfit: signal.takeProfit },
+              );
+            } else {
+              this.logger.warn(`⚠️ Could not set SL/TP on order ${ticketToModify}`);
+            }
           } else {
-            this.logger.warn(`⚠️ Could not set SL/TP on order ${orderResult.order}`);
+            this.logger.warn(`⚠️ Could not find order ticket to set SL/TP`);
           }
         } catch (modifyError) {
-          this.logger.warn(`⚠️ Failed to modify order ${orderResult.order} for SL/TP: ${modifyError.message}`);
+          this.logger.warn(`⚠️ Failed to modify order for SL/TP: ${modifyError.message}`);
         }
       }
 
