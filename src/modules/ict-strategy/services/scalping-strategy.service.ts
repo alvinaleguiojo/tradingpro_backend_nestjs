@@ -169,7 +169,10 @@ export class ScalpingStrategyService {
     }
 
     // Calculate tight scalping levels
-    const pipValue = 0.1; // For XAU/USD, 1 pip = $0.10 per 0.01 lot
+    // For XAU/USD (Gold) with standard brokers:
+    // 1 pip = $0.10 price movement for 5-digit pricing (e.g., 4818.45)
+    // So 50 pips = $5 SL, 80 pips = $8 TP in price movement
+    const pipValue = 0.10; // For XAU/USD with 5-digit pricing
     
     let stopLoss: number;
     let takeProfit: number;
@@ -181,6 +184,8 @@ export class ScalpingStrategyService {
       stopLoss = currentPrice + (this.config.stopLossPips * pipValue);
       takeProfit = currentPrice - (this.config.takeProfitPips * pipValue);
     }
+    
+    this.logger.log(`Scalping SL/TP: Entry=${currentPrice.toFixed(2)}, SL=${stopLoss.toFixed(2)}, TP=${takeProfit.toFixed(2)} (${this.config.stopLossPips}/${this.config.takeProfitPips} pips)`);
 
     const risk = Math.abs(currentPrice - stopLoss);
     const reward = Math.abs(takeProfit - currentPrice);
