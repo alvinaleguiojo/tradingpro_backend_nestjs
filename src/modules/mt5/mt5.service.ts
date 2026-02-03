@@ -671,6 +671,65 @@ export class Mt5Service implements OnModuleInit {
   }
 
   /**
+   * Get list of available symbols from MT5
+   * @param filter Optional filter string to search for specific symbols (e.g., 'XAU', 'GOLD', 'EUR')
+   */
+  async getSymbolList(filter?: string): Promise<string[]> {
+    await this.checkConnection();
+
+    try {
+      const response = await this.axiosClient.get('/SymbolList', {
+        params: { id: this.token },
+      });
+      
+      let symbols: string[] = response.data || [];
+      
+      // Filter symbols if a filter is provided
+      if (filter) {
+        const filterLower = filter.toLowerCase();
+        symbols = symbols.filter((s: string) => 
+          s.toLowerCase().includes(filterLower)
+        );
+      }
+      
+      return symbols;
+    } catch (error) {
+      this.logger.error('Failed to get symbol list', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get full symbol information for multiple symbols
+   * @param filter Optional filter string to search for specific symbols
+   */
+  async getSymbols(filter?: string): Promise<any[]> {
+    await this.checkConnection();
+
+    try {
+      const response = await this.axiosClient.get('/Symbols', {
+        params: { id: this.token },
+      });
+      
+      let symbols: any[] = response.data || [];
+      
+      // Filter symbols if a filter is provided
+      if (filter) {
+        const filterLower = filter.toLowerCase();
+        symbols = symbols.filter((s: any) => 
+          s.symbol?.toLowerCase().includes(filterLower) ||
+          s.description?.toLowerCase().includes(filterLower)
+        );
+      }
+      
+      return symbols;
+    } catch (error) {
+      this.logger.error('Failed to get symbols', error);
+      return [];
+    }
+  }
+
+  /**
    * Get trade history (closed orders/deals) from MT5
    * @param days Number of days of history to fetch (default 30)
    */

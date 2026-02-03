@@ -73,6 +73,32 @@ export class Mt5Controller {
     return { success: true, isOpen };
   }
 
+  @Get('symbols')
+  @ApiOperation({ summary: 'Get list of available symbols (use filter to search for XAU, GOLD, EUR, etc.)' })
+  @ApiQuery({ name: 'filter', required: false, example: 'XAU', description: 'Filter symbols by name (e.g., XAU, GOLD, EUR)' })
+  async getSymbols(@Query('filter') filter?: string) {
+    const symbols = await this.mt5Service.getSymbols(filter);
+    return { 
+      success: true, 
+      count: symbols.length,
+      filter: filter || 'none',
+      data: symbols 
+    };
+  }
+
+  @Get('symbol-list')
+  @ApiOperation({ summary: 'Get simple list of symbol names' })
+  @ApiQuery({ name: 'filter', required: false, example: 'XAU', description: 'Filter symbols by name' })
+  async getSymbolList(@Query('filter') filter?: string) {
+    const symbols = await this.mt5Service.getSymbolList(filter);
+    return { 
+      success: true, 
+      count: symbols.length,
+      filter: filter || 'none',
+      data: symbols 
+    };
+  }
+
   @Get('symbol-info')
   @ApiOperation({ summary: 'Get symbol information' })
   @ApiQuery({ name: 'symbol', required: true, example: 'XAUUSDm' })
