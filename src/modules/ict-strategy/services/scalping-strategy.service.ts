@@ -54,11 +54,24 @@ export class ScalpingStrategyService {
     currentPrice: number,
     spread: number = 0,
   ): TradeSetup | null {
-    if (candles.length < 30) return null;
+    if (candles.length < 30) {
+      this.logger.warn(`Not enough candles for scalping: ${candles.length} (need 30+)`);
+      return null;
+    }
+
+    // Log candle data for debugging
+    const lastCandle = candles[candles.length - 1];
+    this.logger.log(`Analyzing ${candles.length} candles. Last candle: O=${lastCandle.open?.toFixed(2)} H=${lastCandle.high?.toFixed(2)} L=${lastCandle.low?.toFixed(2)} C=${lastCandle.close?.toFixed(2)}`);
+
+    // Validate candle data
+    if (!lastCandle.open || !lastCandle.high || !lastCandle.low || !lastCandle.close) {
+      this.logger.error(`Invalid candle data - missing OHLC values: ${JSON.stringify(lastCandle)}`);
+      return null;
+    }
 
     // Check spread
     if (spread > this.config.maxSpreadPips) {
-      this.logger.debug(`Spread too high: ${spread} pips`);
+      this.logger.debug(`Spread too high: ${spread} pips (max: ${this.config.maxSpreadPips})`);
       return null;
     }
 
@@ -67,7 +80,6 @@ export class ScalpingStrategyService {
     let confidence = 0;
     let direction: 'BUY' | 'SELL' | null = null;
 
-    const lastCandle = candles[candles.length - 1];
     const prevCandle = candles[candles.length - 2];
     const prev2Candle = candles[candles.length - 3];
 
@@ -77,6 +89,7 @@ export class ScalpingStrategyService {
       direction = engulfing.direction;
       reasons.push(`${engulfing.type} engulfing pattern`);
       confidence += 30;
+      this.logger.log(`✓ Engulfing detected: ${engulfing.type} ${engulfing.direction}`);
     }
 
     // === SCALPING SIGNAL 2: Pin Bar / Rejection ===
@@ -86,6 +99,7 @@ export class ScalpingStrategyService {
       if (direction === pinBar.direction) {
         reasons.push(`Pin bar rejection (${pinBar.type})`);
         confidence += 25;
+        this.logger.log(`✓ Pin bar detected: ${pinBar.type} ${pinBar.direction}`);
       }
     }
 
@@ -96,6 +110,7 @@ export class ScalpingStrategyService {
       if (direction === momentum.direction) {
         reasons.push(`Strong ${momentum.direction} momentum`);
         confidence += 20;
+        this.logger.log(`✓ Momentum detected: ${momentum.direction}`);
       }
     }
 
@@ -142,10 +157,14 @@ export class ScalpingStrategyService {
     }
 
     // No clear direction
-    if (!direction) return null;
+    if (!direction) {
+      this.logger.log(`No scalping signal - no pattern detected. Checked: engulfing, pinBar, momentum, doublePattern, liquidityGrab`);
+      return null;
+    }
 
     // Check minimum confidence
     if (confidence < this.config.minConfidence) {
+      this.logger.log(`No scalping signal - confidence too low: ${confidence}% (min: ${this.config.minConfidence}%)`);
       return null;
     }
 

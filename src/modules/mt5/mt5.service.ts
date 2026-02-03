@@ -488,20 +488,59 @@ export class Mt5Service implements OnModuleInit {
 
       const tf = tfMap[timeframe] || 15;
 
-      const response = await this.axiosClient.get('/PriceHistoryMonth', {
-        params: { 
-          id: this.token, 
-          symbol, 
-          timeframe: tf,
-        },
-      });
+      // Use PriceHistoryToday for short-term data (more reliable for scalping)
+      // Fall back to PriceHistoryMonth if not enough data
+      let rawBars: any[] = [];
+      
+      // First try today's data
+      try {
+        const todayResponse = await this.axiosClient.get('/PriceHistoryToday', {
+          params: { 
+            id: this.token, 
+            symbol, 
+            timeframe: tf,
+          },
+        });
+        rawBars = Array.isArray(todayResponse.data) ? todayResponse.data : [];
+        this.logger.log(`PriceHistoryToday returned ${rawBars.length} candles`);
+      } catch (e) {
+        this.logger.warn('PriceHistoryToday failed, trying PriceHistoryMonth');
+      }
 
-      // Return last 'count' bars
-      const bars = Array.isArray(response.data) ? response.data : [];
-      if (bars.length === 0) {
+      // If not enough data from today, get monthly data
+      if (rawBars.length < count) {
+        const monthResponse = await this.axiosClient.get('/PriceHistoryMonth', {
+          params: { 
+            id: this.token, 
+            symbol, 
+            timeframe: tf,
+          },
+        });
+        const monthBars = Array.isArray(monthResponse.data) ? monthResponse.data : [];
+        this.logger.log(`PriceHistoryMonth returned ${monthBars.length} candles`);
+        
+        // Merge: use monthly for history, today for recent
+        if (monthBars.length > rawBars.length) {
+          rawBars = monthBars;
+        }
+      }
+
+      if (rawBars.length === 0) {
         this.logger.warn(`No price history data received for ${symbol}`);
         return [];
       }
+
+      // Map MT5 API response (openPrice, highPrice, etc.) to our interface (open, high, etc.)
+      const bars: Mt5Bar[] = rawBars.map((bar: any) => ({
+        time: bar.time,
+        open: bar.openPrice ?? bar.open,
+        high: bar.highPrice ?? bar.high,
+        low: bar.lowPrice ?? bar.low,
+        close: bar.closePrice ?? bar.close,
+        tickVolume: bar.tickVolume ?? bar.volume ?? 0,
+      }));
+
+      this.logger.log(`Fetched ${bars.length} candles for ${symbol} ${timeframe}, returning last ${count}`);
       return bars.slice(-count);
     } catch (error) {
       this.logger.error(`Failed to get price history for ${symbol}`, error);
