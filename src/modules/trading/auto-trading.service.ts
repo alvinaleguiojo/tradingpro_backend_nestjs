@@ -163,6 +163,7 @@ export class AutoTradingService implements OnModuleInit {
 
   /**
    * Run the complete trading cycle for ALL accounts
+   * IMPORTANT: Generate signal ONCE and apply to all accounts for consistency
    */
   async runTradingCycle(): Promise<void> {
     if (this.isRunning) {
@@ -191,7 +192,39 @@ export class AutoTradingService implements OnModuleInit {
 
       const timeframe = this.configService.get('TRADING_TIMEFRAME', 'M15');
 
-      // Run trading cycle for each account
+      // ========== GENERATE SIGNAL ONCE FOR ALL ACCOUNTS ==========
+      // Connect to first account to get market data and generate signal
+      const primaryAccount = accounts[0];
+      await this.ensureMt5ConnectionForAccount(primaryAccount);
+      
+      const configuredSymbol = this.configService.get('TRADING_SYMBOL', 'XAUUSD');
+      const primarySymbol = await this.mt5Service.getTradingSymbol(configuredSymbol);
+      
+      this.logger.log(`📈 Generating master signal using account ${primaryAccount.user}, symbol: ${primarySymbol}`);
+      
+      const masterSignal = await this.tradingService.analyzeAndGenerateSignal(primarySymbol, timeframe);
+      
+      if (!masterSignal) {
+        this.logger.log('No trading signal generated - skipping all accounts');
+        await this.tradingService.logEvent(
+          TradingEventType.CRON_EXECUTION,
+          `Trading cycle completed - No signal generated`,
+          { accountCount: accounts.length, duration: Date.now() - startTime },
+        );
+        return;
+      }
+
+      this.logger.log(`📊 MASTER SIGNAL: ${masterSignal.signalType} | Confidence: ${masterSignal.confidence}% | Strength: ${masterSignal.strength}`);
+
+      // ========== EXECUTE SAME SIGNAL ON ALL ACCOUNTS ==========
+      const minConfidence = this.scalpingMode ? 20 : 30;
+      
+      if (masterSignal.signalType === 'HOLD' || masterSignal.confidence < minConfidence) {
+        this.logger.log(`⏸️ Signal not actionable: ${masterSignal.signalType} with ${masterSignal.confidence}% confidence`);
+        return;
+      }
+
+      // Run trading cycle for each account with the SAME signal
       for (const account of accounts) {
         try {
           this.logger.log(`\n📊 Processing account: ${account.user}`);
@@ -200,7 +233,6 @@ export class AutoTradingService implements OnModuleInit {
           await this.ensureMt5ConnectionForAccount(account);
 
           // Detect the correct Gold symbol for this broker dynamically
-          const configuredSymbol = this.configService.get('TRADING_SYMBOL', 'XAUUSD');
           const symbol = await this.mt5Service.getTradingSymbol(configuredSymbol);
           this.logger.log(`📈 Using trading symbol: ${symbol}`);
 
@@ -210,28 +242,19 @@ export class AutoTradingService implements OnModuleInit {
             { symbol, timeframe, accountId: account.user, timestamp: new Date().toISOString() },
           );
 
-          // Generate trading signal
-          const signal = await this.tradingService.analyzeAndGenerateSignal(symbol, timeframe);
+          // Clone the master signal with this account's symbol
+          const accountSignal = {
+            ...masterSignal.toObject ? masterSignal.toObject() : masterSignal,
+            symbol: symbol, // Use this broker's symbol
+          };
 
-          if (!signal) {
-            this.logger.log(`No signal for account ${account.user}`);
-            continue;
-          }
-
-          this.logger.log(`📊 [${account.user}] Signal: ${signal.signalType} | Confidence: ${signal.confidence}% | Strength: ${signal.strength}`);
-
-          // Execute trade if signal is actionable
-          const minConfidence = this.scalpingMode ? 20 : 30;
-          if (signal.signalType !== 'HOLD' && signal.confidence >= minConfidence) {
-            const trade = await this.tradingService.executeTrade(signal);
-            
-            if (trade) {
-              this.logger.log(`✅ [${account.user}] Trade executed: ${trade.direction} ${trade.lotSize} ${trade.symbol} @ ${trade.entryPrice}`);
-            } else {
-              this.logger.log(`⏸️ [${account.user}] Trade not executed (conditions not met)`);
-            }
+          // Execute the SAME signal direction on this account
+          const trade = await this.tradingService.executeTrade(accountSignal as any);
+          
+          if (trade) {
+            this.logger.log(`✅ [${account.user}] Trade executed: ${trade.direction} ${trade.lotSize} ${trade.symbol} @ ${trade.entryPrice}`);
           } else {
-            this.logger.log(`⏸️ [${account.user}] Signal not actionable: ${signal.signalType} with ${signal.confidence}% confidence`);
+            this.logger.log(`⏸️ [${account.user}] Trade not executed (conditions not met)`);
           }
 
         } catch (accountError) {
@@ -276,8 +299,9 @@ export class AutoTradingService implements OnModuleInit {
 
   /**
    * Run trading cycle for ALL accounts and return results (for serverless environments)
+   * IMPORTANT: Generate signal ONCE and apply to all accounts for consistency
    */
-  async runTradingCycleWithResult(): Promise<{ success: boolean; message: string; accounts?: any[] }> {
+  async runTradingCycleWithResult(): Promise<{ success: boolean; message: string; accounts?: any[]; masterSignal?: any }> {
     if (this.isRunning) {
       return { success: false, message: 'Trading cycle already running' };
     }
@@ -302,13 +326,56 @@ export class AutoTradingService implements OnModuleInit {
       this.logger.log(`🔄 Running trading cycle for ${accounts.length} account(s)`);
 
       const timeframe = this.configService.get('TRADING_TIMEFRAME', 'M15');
+      const configuredSymbol = this.configService.get('TRADING_SYMBOL', 'XAUUSD');
 
-      // Process each account
+      // ========== GENERATE SIGNAL ONCE FOR ALL ACCOUNTS ==========
+      const primaryAccount = accounts[0];
+      await this.ensureMt5ConnectionForAccount(primaryAccount);
+      
+      const primarySymbol = await this.mt5Service.getTradingSymbol(configuredSymbol);
+      this.logger.log(`📈 Generating master signal using account ${primaryAccount.user}, symbol: ${primarySymbol}`);
+      
+      const masterSignal = await this.tradingService.analyzeAndGenerateSignal(primarySymbol, timeframe);
+      
+      if (!masterSignal) {
+        this.isRunning = false;
+        return { 
+          success: true, 
+          message: 'No trading signal generated - no valid setup found',
+          accounts: accountResults,
+        };
+      }
+
+      this.logger.log(`📊 MASTER SIGNAL: ${masterSignal.signalType} | Confidence: ${masterSignal.confidence}%`);
+
+      const masterSignalData = {
+        id: (masterSignal as any)._id?.toString(),
+        type: masterSignal.signalType,
+        strength: masterSignal.strength,
+        confidence: masterSignal.confidence,
+        entryPrice: masterSignal.entryPrice,
+        stopLoss: masterSignal.stopLoss,
+        takeProfit: masterSignal.takeProfit,
+      };
+
+      // Check if signal is actionable
+      const minConfidenceForTrade = this.scalpingMode ? 20 : 30;
+      if (masterSignal.signalType === 'HOLD' || masterSignal.confidence < minConfidenceForTrade) {
+        this.isRunning = false;
+        return {
+          success: true,
+          message: `Signal not actionable: ${masterSignal.signalType} (${masterSignal.confidence}% confidence)`,
+          masterSignal: masterSignalData,
+          accounts: accountResults,
+        };
+      }
+
+      // ========== EXECUTE SAME SIGNAL ON ALL ACCOUNTS ==========
       for (const account of accounts) {
         const accountResult: any = {
           accountId: account.user,
           success: false,
-          signal: null,
+          signal: masterSignalData,
           trade: null,
           error: null,
         };
@@ -319,61 +386,39 @@ export class AutoTradingService implements OnModuleInit {
           // Connect to this account
           await this.ensureMt5ConnectionForAccount(account);
 
-          // Detect the correct Gold symbol for this broker dynamically
-          const configuredSymbol = this.configService.get('TRADING_SYMBOL', 'XAUUSD');
+          // Detect the correct Gold symbol for this broker
           const symbol = await this.mt5Service.getTradingSymbol(configuredSymbol);
           this.logger.log(`📈 Using trading symbol: ${symbol}`);
+          
           await this.tradingService.logEvent(
             TradingEventType.CRON_EXECUTION,
-            `Trading cycle for ${symbol} - Account: ${account.user}`,
-            { symbol, timeframe, accountId: account.user },
+            `Trading cycle for ${symbol} - Account: ${account.user} - Signal: ${masterSignal.signalType}`,
+            { symbol, timeframe, accountId: account.user, signalType: masterSignal.signalType },
           );
 
-          // Generate trading signal
-          const signal = await this.tradingService.analyzeAndGenerateSignal(symbol, timeframe);
-
-          if (!signal) {
-            this.logger.log(`No signal for account ${account.user}`);
-            accountResult.success = true;
-            accountResult.message = 'No trading signal - no valid setup found';
-            accountResults.push(accountResult);
-            continue;
-          }
-
-          this.logger.log(`📊 [${account.user}] Signal: ${signal.signalType} | Confidence: ${signal.confidence}%`);
-
-          accountResult.signal = {
-            id: (signal as any)._id?.toString(),
-            type: signal.signalType,
-            strength: signal.strength,
-            confidence: signal.confidence,
-            entryPrice: signal.entryPrice,
-            stopLoss: signal.stopLoss,
-            takeProfit: signal.takeProfit,
+          // Clone the master signal with this account's symbol
+          const accountSignal = {
+            ...masterSignal.toObject ? masterSignal.toObject() : masterSignal,
+            symbol: symbol,
           };
 
-          // Execute trade if signal is actionable
-          const minConfidenceForTrade = this.scalpingMode ? 20 : 30;
-          let trade: TradeDocument | null = null;
+          // Execute the SAME signal direction on this account
+          const trade = await this.tradingService.executeTrade(accountSignal as any);
           
-          if (signal.signalType !== 'HOLD' && signal.confidence >= minConfidenceForTrade) {
-            trade = await this.tradingService.executeTrade(signal);
-            
-            if (trade) {
-              this.logger.log(`✅ [${account.user}] Trade executed: ${trade.direction} @ ${trade.entryPrice}`);
-              accountResult.trade = {
-                id: (trade as any)._id?.toString(),
-                direction: trade.direction,
-                entryPrice: trade.entryPrice,
-                lotSize: trade.lotSize,
-              };
-            }
+          if (trade) {
+            this.logger.log(`✅ [${account.user}] Trade executed: ${trade.direction} @ ${trade.entryPrice}`);
+            accountResult.trade = {
+              id: (trade as any)._id?.toString(),
+              direction: trade.direction,
+              entryPrice: trade.entryPrice,
+              lotSize: trade.lotSize,
+            };
           }
 
           accountResult.success = true;
           accountResult.message = trade 
             ? `Trade executed: ${trade.direction} @ ${trade.entryPrice}` 
-            : `Signal: ${signal.signalType} (${signal.confidence}% confidence)`;
+            : `Trade not executed (conditions not met)`;
 
         } catch (accountError) {
           this.logger.error(`Failed to process account ${account.user}: ${accountError.message}`);
@@ -396,6 +441,7 @@ export class AutoTradingService implements OnModuleInit {
       return {
         success: true,
         message: `Processed ${accounts.length} account(s), executed ${tradesExecuted} trade(s)`,
+        masterSignal: masterSignalData,
         accounts: accountResults,
       };
 
