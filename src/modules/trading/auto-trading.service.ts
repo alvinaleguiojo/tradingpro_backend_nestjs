@@ -1,9 +1,13 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { TradingService } from './trading.service';
+import { Mt5Service } from '../mt5/mt5.service';
 import { TradingEventType } from '../../entities/trading-log.entity';
 import { Trade } from '../../entities/trade.entity';
+import { Mt5Connection } from '../../entities/mt5-connection.entity';
 
 @Injectable()
 export class AutoTradingService implements OnModuleInit {
@@ -15,6 +19,9 @@ export class AutoTradingService implements OnModuleInit {
   constructor(
     private configService: ConfigService,
     private tradingService: TradingService,
+    private mt5Service: Mt5Service,
+    @InjectRepository(Mt5Connection)
+    private mt5ConnectionRepo: Repository<Mt5Connection>,
   ) {
     // Initialize from environment variable
     this.isEnabled = this.configService.get('AUTO_TRADING_ENABLED', 'true') === 'true';
@@ -57,9 +64,75 @@ export class AutoTradingService implements OnModuleInit {
   @Cron('0 */2 * * * *')
   async handleSyncCron() {
     try {
+      await this.ensureMt5Connection();
       await this.tradingService.syncTradesWithMt5();
     } catch (error) {
       this.logger.error('Trade sync failed', error);
+    }
+  }
+
+  /**
+   * Ensure MT5 connection is active before trading operations
+   * Loads credentials from database, connects, and updates token
+   */
+  private async ensureMt5Connection(): Promise<void> {
+    try {
+      // Step 1: Find the most recent active connection from database
+      const connection = await this.mt5ConnectionRepo.findOne({
+        where: {},
+        order: { updatedAt: 'DESC' },
+      });
+
+      if (!connection) {
+        throw new Error('No MT5 credentials found in database. Please login from the app first.');
+      }
+
+      if (!connection.user || !connection.password || !connection.host) {
+        throw new Error(`Incomplete MT5 credentials for account ${connection.user}`);
+      }
+
+      this.logger.log(`Loading MT5 credentials for account ${connection.user} from database`);
+
+      // Step 2: Set credentials in MT5 service
+      await this.mt5Service.setCredentials(
+        connection.user,
+        connection.password,
+        connection.host,
+        connection.port?.toString() || '443',
+      );
+
+      // Step 3: Check if existing token is still valid
+      const tokenAge = connection.lastConnectedAt 
+        ? Date.now() - new Date(connection.lastConnectedAt).getTime()
+        : Infinity;
+      
+      const tokenExpired = tokenAge > 25 * 60 * 1000; // Token expires after ~30 min, refresh at 25 min
+
+      if (connection.token && !tokenExpired) {
+        // Try to use existing token
+        this.logger.log(`Using cached token (age: ${Math.round(tokenAge / 1000)}s)`);
+        const isValid = await this.mt5Service.checkConnection();
+        if (isValid) {
+          this.logger.log('✅ MT5 connection restored from cached token');
+          return;
+        }
+      }
+
+      // Step 4: Token expired or invalid, reconnect
+      this.logger.log('Token expired or invalid, reconnecting to MT5...');
+      const newToken = await this.mt5Service.connect();
+
+      // Step 5: Update token in database
+      connection.token = newToken;
+      connection.isConnected = true;
+      connection.lastConnectedAt = new Date();
+      await this.mt5ConnectionRepo.save(connection);
+
+      this.logger.log(`✅ MT5 reconnected and token updated for account ${connection.user}`);
+
+    } catch (error) {
+      this.logger.error(`Failed to ensure MT5 connection: ${error.message}`);
+      throw error;
     }
   }
 
@@ -81,6 +154,9 @@ export class AutoTradingService implements OnModuleInit {
     const startTime = Date.now();
 
     try {
+      // Step 0: Ensure MT5 connection is ready
+      await this.ensureMt5Connection();
+
       const symbol = this.configService.get('TRADING_SYMBOL', 'XAUUSDm');
       const timeframe = this.configService.get('TRADING_TIMEFRAME', 'M15');
 
@@ -167,6 +243,9 @@ export class AutoTradingService implements OnModuleInit {
     const startTime = Date.now();
 
     try {
+      // Step 0: Ensure MT5 connection is ready
+      await this.ensureMt5Connection();
+
       const symbol = this.configService.get('TRADING_SYMBOL', 'XAUUSDm');
       const timeframe = this.configService.get('TRADING_TIMEFRAME', 'M15');
 
