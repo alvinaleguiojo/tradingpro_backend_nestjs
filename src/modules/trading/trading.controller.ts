@@ -71,7 +71,7 @@ export class TradingController {
         config: this.scalpingStrategy.getConfig(),
       }),
       // Money management status - enhanced with MT5 balance
-      this.moneyManagementService.getMoneyManagementStatus(accountId).catch(err => {
+      this.moneyManagementService.getMoneyManagementStatus(accountId || 'default').catch(err => {
         // Return fallback with MT5 balance if available
         const balance = mt5Status.balance || 0;
         return { 

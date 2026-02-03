@@ -643,9 +643,9 @@ export class TradingService implements OnModuleInit {
       // Filter to only trading orders (not balance operations)
       const tradeOrders = mt5Orders.filter(o => 
         o.symbol && o.symbol.length > 0 && 
-        (o.orderType === 'Buy' || o.orderType === 'Sell' || 
-         o.orderType === 'BuyLimit' || o.orderType === 'SellLimit' ||
-         o.orderType === 'BuyStop' || o.orderType === 'SellStop')
+        (o.type === 'Buy' || o.type === 'Sell' || 
+         o.type === 'BuyLimit' || o.type === 'SellLimit' ||
+         o.type === 'BuyStop' || o.type === 'SellStop')
       );
       mt5OpenCount = tradeOrders.length;
     } catch (error) {
