@@ -74,8 +74,30 @@ export class TradingService implements OnModuleInit {
     const expiresAt = new Date(now.getTime() + this.LOCK_TIMEOUT_MS);
 
     try {
-      // Try to atomically create or update the lock
-      // Only succeeds if no lock exists or existing lock has expired
+      // Use a two-step approach for reliable distributed locking:
+      // 1. Try to insert a new lock document (will fail if one exists)
+      // 2. If that fails, try to update an expired/released lock
+      
+      // Step 1: Try to create a new lock (for accounts with no lock yet)
+      try {
+        await this.tradeLockModel.create({
+          accountId,
+          lockId,
+          lockedAt: now,
+          expiresAt,
+          released: false,
+        });
+        this.logger.log(`🔒 Acquired NEW trade lock for account ${accountId}`);
+        return lockId;
+      } catch (createError: any) {
+        // If it's not a duplicate key error, something else went wrong
+        if (createError.code !== 11000) {
+          throw createError;
+        }
+        // Duplicate key - lock document exists, try to acquire it
+      }
+
+      // Step 2: Try to update an existing lock that's released or expired
       const result = await this.tradeLockModel.findOneAndUpdate(
         {
           accountId,
@@ -86,34 +108,24 @@ export class TradingService implements OnModuleInit {
         },
         {
           $set: {
-            accountId,
             lockId,
             lockedAt: now,
             expiresAt,
             released: false,
           },
         },
-        { 
-          upsert: true, 
-          new: true,
-          setDefaultsOnInsert: true,
-        },
+        { new: true },
       );
 
-      // Check if we got our lock (our lockId matches)
       if (result && result.lockId === lockId) {
-        this.logger.debug(`🔒 Acquired trade lock for account ${accountId}, lockId: ${lockId}`);
+        this.logger.log(`🔒 Acquired EXISTING trade lock for account ${accountId}`);
         return lockId;
       }
 
-      this.logger.debug(`⏳ Failed to acquire lock for account ${accountId} - another instance has it`);
+      // Lock is held by another instance and hasn't expired
+      this.logger.log(`⏳ Lock held by another instance for account ${accountId} - skipping trade`);
       return null;
     } catch (error: any) {
-      // Duplicate key error means another instance grabbed the lock
-      if (error.code === 11000) {
-        this.logger.debug(`⏳ Lock contention for account ${accountId} - another instance won`);
-        return null;
-      }
       this.logger.error(`Lock acquisition error for ${accountId}: ${error.message}`);
       return null;
     }
