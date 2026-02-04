@@ -213,6 +213,10 @@ export class MoneyManagementService implements OnModuleInit {
     const state = await this.getOrCreateAccountState(accountId);
     const today = new Date();
     
+    // Ensure profit and balance are valid numbers
+    const safeProfit = isNaN(profit) ? 0 : profit;
+    const safeNewBalance = isNaN(newBalance) ? Number(state.currentBalance) || 100 : newBalance;
+    
     // Reset daily profit if new day
     if (!this.isSameDay(state.lastTradingDay, today)) {
       state.dailyProfit = 0;
@@ -233,12 +237,12 @@ export class MoneyManagementService implements OnModuleInit {
       state.monthStartDate = this.getMonthStartDate();
     }
     
-    // Update profits
-    state.dailyProfit = Number(state.dailyProfit) + profit;
-    state.weeklyProfit = Number(state.weeklyProfit) + profit;
-    state.monthlyProfit = Number(state.monthlyProfit) + profit;
-    state.totalProfit = Number(state.totalProfit) + profit;
-    state.currentBalance = newBalance;
+    // Update profits with NaN protection
+    state.dailyProfit = (Number(state.dailyProfit) || 0) + safeProfit;
+    state.weeklyProfit = (Number(state.weeklyProfit) || 0) + safeProfit;
+    state.monthlyProfit = (Number(state.monthlyProfit) || 0) + safeProfit;
+    state.totalProfit = (Number(state.totalProfit) || 0) + safeProfit;
+    state.currentBalance = safeNewBalance;
     state.lastTradingDay = today;
     
     // Update level based on new balance
@@ -267,15 +271,38 @@ export class MoneyManagementService implements OnModuleInit {
   async syncWithMt5(accountId: string): Promise<TradingAccountStateDocument> {
     const accountSummary = await this.mt5Service.getAccountSummary();
     
-    if (!accountSummary) {
-      throw new Error('Could not get MT5 account summary');
+    if (!accountSummary || accountSummary.balance === undefined || accountSummary.balance === null) {
+      // If we can't get MT5 data, return existing state or create with defaults
+      this.logger.warn(`Could not get MT5 account summary for ${accountId}, using existing state`);
+      const existingState = await this.accountStateModel.findOne({ accountId }).exec();
+      if (existingState) {
+        return existingState;
+      }
+      // Create a minimal state with default values
+      const state = new this.accountStateModel({
+        accountId,
+        initialBalance: 100,
+        currentBalance: 100,
+        currentLevel: 1,
+        currentLotSize: 0.01,
+        dailyProfit: 0,
+        weeklyProfit: 0,
+        monthlyProfit: 0,
+        totalProfit: 0,
+        lastTradingDay: new Date(),
+        weekStartDate: this.getWeekStartDate(),
+        monthStartDate: this.getMonthStartDate(),
+      });
+      await state.save();
+      return state;
     }
     
     const state = await this.getOrCreateAccountState(accountId);
     const newBalance = accountSummary.balance;
-    const profitDiff = newBalance - Number(state.currentBalance);
+    const currentBalance = Number(state.currentBalance) || 0;
+    const profitDiff = newBalance - currentBalance;
     
-    if (profitDiff !== 0) {
+    if (profitDiff !== 0 && !isNaN(profitDiff)) {
       return this.updateAccountState(accountId, profitDiff, newBalance);
     }
     
