@@ -5,3 +5,4 @@ export * from './mt5-connection.schema';
 export * from './trading-log.schema';
 export * from './money-management-level.schema';
 export * from './trading-account-state.schema';
+export * from './trade-lock.schema';

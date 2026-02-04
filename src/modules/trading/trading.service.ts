@@ -2,9 +2,11 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
+import { v4 as uuidv4 } from 'uuid';
 import { Trade, TradeDocument, TradeDirection, TradeStatus } from '../../schemas/trade.schema';
 import { TradingSignal, TradingSignalDocument, SignalType, SignalStrength } from '../../schemas/trading-signal.schema';
 import { TradingLog, TradingLogDocument, TradingEventType } from '../../schemas/trading-log.schema';
+import { TradeLock, TradeLockDocument } from '../../schemas/trade-lock.schema';
 import { Mt5Service, OrderSendResult } from '../mt5/mt5.service';
 import { IctStrategyService } from '../ict-strategy/ict-strategy.service';
 import { OpenAiService, AiTradeRecommendation } from '../openai/openai.service';
@@ -17,6 +19,7 @@ import { IctAnalysisResult, TradeSetup, Candle } from '../ict-strategy/types';
 export class TradingService implements OnModuleInit {
   private readonly logger = new Logger(TradingService.name);
   private scalpingMode: boolean = true; // Enable aggressive scalping by default
+  private readonly LOCK_TIMEOUT_MS = 30000; // 30 second lock timeout
 
   constructor(
     private configService: ConfigService,
@@ -26,6 +29,8 @@ export class TradingService implements OnModuleInit {
     private signalModel: Model<TradingSignalDocument>,
     @InjectModel(TradingLog.name)
     private logModel: Model<TradingLogDocument>,
+    @InjectModel(TradeLock.name)
+    private tradeLockModel: Model<TradeLockDocument>,
     private mt5Service: Mt5Service,
     private ictStrategyService: IctStrategyService,
     private openAiService: OpenAiService,
@@ -56,6 +61,77 @@ export class TradingService implements OnModuleInit {
    */
   isScalpingMode(): boolean {
     return this.scalpingMode;
+  }
+
+  /**
+   * Acquire a distributed lock for trading on a specific account
+   * Uses MongoDB's atomic upsert to ensure only one instance can acquire the lock
+   * @returns lockId if acquired, null if failed
+   */
+  async acquireTradeLock(accountId: string): Promise<string | null> {
+    const lockId = uuidv4();
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + this.LOCK_TIMEOUT_MS);
+
+    try {
+      // Try to atomically create or update the lock
+      // Only succeeds if no lock exists or existing lock has expired
+      const result = await this.tradeLockModel.findOneAndUpdate(
+        {
+          accountId,
+          $or: [
+            { released: true },
+            { expiresAt: { $lt: now } },
+          ],
+        },
+        {
+          $set: {
+            accountId,
+            lockId,
+            lockedAt: now,
+            expiresAt,
+            released: false,
+          },
+        },
+        { 
+          upsert: true, 
+          new: true,
+          setDefaultsOnInsert: true,
+        },
+      );
+
+      // Check if we got our lock (our lockId matches)
+      if (result && result.lockId === lockId) {
+        this.logger.debug(`🔒 Acquired trade lock for account ${accountId}, lockId: ${lockId}`);
+        return lockId;
+      }
+
+      this.logger.debug(`⏳ Failed to acquire lock for account ${accountId} - another instance has it`);
+      return null;
+    } catch (error: any) {
+      // Duplicate key error means another instance grabbed the lock
+      if (error.code === 11000) {
+        this.logger.debug(`⏳ Lock contention for account ${accountId} - another instance won`);
+        return null;
+      }
+      this.logger.error(`Lock acquisition error for ${accountId}: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Release a trade lock
+   */
+  async releaseTradeLock(accountId: string, lockId: string): Promise<void> {
+    try {
+      await this.tradeLockModel.updateOne(
+        { accountId, lockId },
+        { $set: { released: true } },
+      );
+      this.logger.debug(`🔓 Released trade lock for account ${accountId}`);
+    } catch (error: any) {
+      this.logger.warn(`Failed to release lock for ${accountId}: ${error.message}`);
+    }
   }
 
   /**
@@ -423,21 +499,38 @@ export class TradingService implements OnModuleInit {
 
   /**
    * Execute a trade based on a signal
+   * Uses distributed locking to prevent race conditions in serverless environment
    */
   async executeTrade(signal: TradingSignalDocument): Promise<TradeDocument | null> {
     // Use the currently connected MT5 account, fallback to env variable
     const accountId: string = this.mt5Service.getCurrentAccountId() || this.configService.get('MT5_USER', 'default');
     
+    // ===== ACQUIRE DISTRIBUTED LOCK =====
+    // This prevents race conditions where multiple serverless instances try to trade at the same time
+    const lockId = await this.acquireTradeLock(accountId);
+    if (!lockId) {
+      this.logger.log(`⏳ Could not acquire trade lock for account ${accountId} - another trade in progress`);
+      await this.logEvent(
+        TradingEventType.CRON_EXECUTION,
+        `Trade skipped: Lock not acquired (another trade in progress)`,
+        { accountId },
+        'info',
+      );
+      return null;
+    }
+
     try {
       // Check if auto trading is enabled
       const autoTradingEnabled = this.configService.get('AUTO_TRADING_ENABLED', 'true') === 'true';
       if (!autoTradingEnabled) {
         this.logger.log('Auto trading is disabled, skipping execution');
+        await this.releaseTradeLock(accountId, lockId);
         return null;
       }
 
       // Check if signal is valid for trading
       if (signal.signalType === SignalType.HOLD) {
+        await this.releaseTradeLock(accountId, lockId);
         return null;
       }
 
@@ -445,6 +538,7 @@ export class TradingService implements OnModuleInit {
       const minConfidence = this.scalpingMode ? 20 : 30;
       if (signal.confidence < minConfidence) {
         this.logger.log(`Signal confidence too low: ${signal.confidence}% (min: ${minConfidence}%)`);
+        await this.releaseTradeLock(accountId, lockId);
         return null;
       }
 
@@ -506,6 +600,7 @@ export class TradingService implements OnModuleInit {
           { accountId, openPositions: allOpenOrders.length, maxPositions },
           'info',
         );
+        await this.releaseTradeLock(accountId, lockId);
         return null;
       }
 
@@ -519,6 +614,7 @@ export class TradingService implements OnModuleInit {
           { symbol: signal.symbol },
           'info',
         );
+        await this.releaseTradeLock(accountId, lockId);
         return null;
       }
 
@@ -546,6 +642,7 @@ export class TradingService implements OnModuleInit {
           undefined,
           signalIdStr,
         );
+        await this.releaseTradeLock(accountId, lockId);
         return null;
       }
 
@@ -640,6 +737,8 @@ export class TradingService implements OnModuleInit {
         signal._id?.toString(),
       );
 
+      // Release the lock after successful trade
+      await this.releaseTradeLock(accountId, lockId);
       return savedTrade;
     } catch (error) {
       await this.logEvent(
@@ -650,6 +749,8 @@ export class TradingService implements OnModuleInit {
         undefined,
         signal._id?.toString(),
       );
+      // Release the lock on error
+      await this.releaseTradeLock(accountId, lockId);
       return null;
     }
   }
