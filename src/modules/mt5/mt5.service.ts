@@ -450,15 +450,6 @@ export class Mt5Service implements OnModuleInit {
   }
 
   /**
-   * Get the current account ID (MT5 user/login)
-   * Returns the user ID from dynamic credentials or env config
-   */
-  getCurrentAccountId(): string | null {
-    const creds = this.getCredentials();
-    return creds.user || null;
-  }
-
-  /**
    * Get the REAL connected account ID by calling the MT5 API
    * This verifies which account the token is actually connected to
    */
