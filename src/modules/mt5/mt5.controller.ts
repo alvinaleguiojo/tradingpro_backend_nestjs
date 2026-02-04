@@ -162,15 +162,24 @@ export class Mt5Controller {
       stopLoss?: number;
       takeProfit?: number;
       comment?: string;
+      userId?: string;
     },
   ) {
+    // Ensure we're connected to the correct account
+    if (body.userId) {
+      await this.mt5Service.ensureAccountConnection(body.userId);
+    }
     const result = await this.mt5Service.sendOrder(body);
     return { success: !result.error, data: result };
   }
 
   @Post('order/close')
   @ApiOperation({ summary: 'Close an order' })
-  async closeOrder(@Body() body: { ticket: string; volume?: number }) {
+  async closeOrder(@Body() body: { ticket: string; volume?: number; userId?: string }) {
+    // Ensure we're connected to the correct account
+    if (body.userId) {
+      await this.mt5Service.ensureAccountConnection(body.userId);
+    }
     const success = await this.mt5Service.closeOrder(body.ticket, body.volume);
     return { success };
   }
@@ -178,8 +187,12 @@ export class Mt5Controller {
   @Post('order/modify')
   @ApiOperation({ summary: 'Modify an order' })
   async modifyOrder(
-    @Body() body: { ticket: string; stopLoss?: number; takeProfit?: number },
+    @Body() body: { ticket: string; stopLoss?: number; takeProfit?: number; userId?: string },
   ) {
+    // Ensure we're connected to the correct account
+    if (body.userId) {
+      await this.mt5Service.ensureAccountConnection(body.userId);
+    }
     const success = await this.mt5Service.modifyOrder(body);
     return { success };
   }

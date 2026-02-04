@@ -170,14 +170,18 @@ export class Mt5Service implements OnModuleInit {
   /**
    * Ensure we're connected to the correct account
    * If currently connected to a different account, switch to the requested one
+   * On serverless (Vercel), each request may be a new instance, so we always verify
    */
   async ensureAccountConnection(userId: string): Promise<boolean> {
-    // If already connected to this account, we're good
+    this.logger.log(`ensureAccountConnection called for user ${userId}, current: ${this.currentTokenAccountId}, hasToken: ${!!this.token}`);
+    
+    // If already connected to this account with a valid token, we're good
     if (this.currentTokenAccountId === userId && this.token) {
+      this.logger.log(`Already connected to account ${userId}`);
       return true;
     }
     
-    this.logger.log(`Switching connection from ${this.currentTokenAccountId} to ${userId}`);
+    this.logger.log(`Switching connection from ${this.currentTokenAccountId || 'none'} to ${userId}`);
     
     // Load credentials for this user from database
     try {
@@ -196,6 +200,7 @@ export class Mt5Service implements OnModuleInit {
         
         // Connect with new credentials
         await this.connect();
+        this.logger.log(`Successfully switched to account ${userId}`);
         return true;
       } else {
         this.logger.warn(`No credentials found in database for user ${userId}`);
