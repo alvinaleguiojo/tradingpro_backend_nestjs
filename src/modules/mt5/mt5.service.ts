@@ -1212,10 +1212,17 @@ export class Mt5Service implements OnModuleInit {
             return xauWithUsd;
           }
           
-          // Priority 3: GOLD symbol
-          const goldSymbol = symbols.find((s: string) => 
-            s.toUpperCase().startsWith('GOLD')
-          );
+          // Priority 3: GOLD symbol (but exclude stock symbols like GoldmSachs/Goldman)
+          const goldSymbol = symbols.find((s: string) => {
+            const upper = s.toUpperCase();
+            // Must start with GOLD but not be a stock (Goldman Sachs, etc.)
+            return upper.startsWith('GOLD') && 
+                   !upper.includes('SACHS') && 
+                   !upper.includes('MAN') &&
+                   !upper.includes('CORP') &&
+                   !upper.includes('FIELD') &&
+                   !upper.includes('MINING');
+          });
           if (goldSymbol) {
             this.logger.log(`✅ Detected Gold symbol (GOLD*): ${goldSymbol}`);
             return goldSymbol;
