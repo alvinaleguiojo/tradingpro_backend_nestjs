@@ -149,6 +149,13 @@ export class ScalpingStrategyService {
       }
     }
 
+    // === TREND FILTER: Check if price is above/below EMA20 ===
+    // This filters out trades against the main trend direction
+    const trendDirection = this.getTrendDirection(candles.slice(-25));
+    if (trendDirection) {
+      this.logger.log(`📊 Trend direction: ${trendDirection.direction} (price ${trendDirection.position} EMA20)`);
+    }
+
     // === SCALPING SIGNAL 7: RSI Extremes (reversal signal) ===
     const rsiSignal = this.checkRSI(candles.slice(-14));
     if (rsiSignal) {
@@ -188,6 +195,21 @@ export class ScalpingStrategyService {
     if (!direction) {
       this.logger.log(`No scalping signal - no pattern detected. Checked: engulfing, pinBar, momentum, doublePattern, liquidityGrab, emaCross, rsi`);
       return null;
+    }
+
+    // === TREND FILTER (Critical) ===
+    // Block trades that go against the main trend (price above/below EMA20)
+    if (trendDirection && !this.config.allowCounterTrend) {
+      if (direction === 'BUY' && trendDirection.direction === 'BEARISH') {
+        this.logger.log(`🚫 BUY signal BLOCKED - Price is BELOW EMA20 (bearish trend). Not taking BUY in downtrend.`);
+        return null;
+      }
+      if (direction === 'SELL' && trendDirection.direction === 'BULLISH') {
+        this.logger.log(`🚫 SELL signal BLOCKED - Price is ABOVE EMA20 (bullish trend). Not taking SELL in uptrend.`);
+        return null;
+      }
+      // Add trend confirmation to confluences
+      confluences.push(`Trend aligned (${trendDirection.direction})`);
     }
 
     // Add EMA as confluence if it confirms direction
@@ -416,6 +438,37 @@ export class ScalpingStrategyService {
     }
 
     return null;
+  }
+
+  /**
+   * Get overall trend direction based on price position relative to EMA20
+   * This is used as a trend filter to avoid trading against the main trend
+   */
+  private getTrendDirection(candles: Candle[]): { direction: 'BULLISH' | 'BEARISH'; position: string } | null {
+    if (candles.length < 20) return null;
+
+    const closes = candles.map(c => c.close);
+    const ema20 = this.calculateEMA(closes, 20);
+    
+    if (ema20.length === 0) return null;
+
+    const currentPrice = closes[closes.length - 1];
+    const currentEMA = ema20[ema20.length - 1];
+    
+    // Calculate how far price is from EMA (as percentage)
+    const distancePercent = ((currentPrice - currentEMA) / currentEMA) * 100;
+    
+    // Require price to be at least 0.05% away from EMA to confirm trend
+    // This prevents choppy signals when price is hovering around EMA
+    if (Math.abs(distancePercent) < 0.05) {
+      return null; // Price is too close to EMA, no clear trend
+    }
+
+    if (currentPrice > currentEMA) {
+      return { direction: 'BULLISH', position: 'ABOVE' };
+    } else {
+      return { direction: 'BEARISH', position: 'BELOW' };
+    }
   }
 
   /**
