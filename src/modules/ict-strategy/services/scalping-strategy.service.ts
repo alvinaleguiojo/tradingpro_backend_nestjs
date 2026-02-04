@@ -24,20 +24,20 @@ export interface ScalpingConfig {
 
 // Aggressive scalping defaults for XAU/USD
 const AGGRESSIVE_SCALPING_CONFIG: ScalpingConfig = {
-  minConfidence: 20,              // Lower threshold - more trades
-  minRiskReward: 1.2,             // Accept 1.2:1 R:R
+  minConfidence: 30,              // Increased from 20 - require at least 2 signals or 1 strong signal
+  minRiskReward: 1.5,             // Increased from 1.2 - better reward
   maxSpreadPips: 30,              // Max 30 pips spread for gold
   
   stopLossPips: 50,               // Tight 50 pip stop (5 dollars on 0.01 lot)
-  takeProfitPips: 80,             // 80 pip target
-  trailingStopPips: 30,           // Trail at 30 pips
+  takeProfitPips: 100,            // Increased from 80 - allow more profit on winners
+  trailingStopPips: 40,           // Increased from 30 - give more room
   
   usePartialTakeProfit: true,
   partialProfitPercent: 50,       // Close 50% at first target
-  breakEvenAtProfit: 30,          // Move to BE after 30 pips
+  breakEvenAtProfit: 40,          // Increased from 30 - move to BE after 40 pips
   
   onlyTradeDuringKillZones: false, // Trade any time for scalping
-  allowCounterTrend: true,         // Allow counter-trend scalps
+  allowCounterTrend: false,        // Changed to false - only trade with trend
 };
 
 @Injectable()
