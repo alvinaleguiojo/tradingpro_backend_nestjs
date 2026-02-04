@@ -1255,7 +1255,7 @@ export class Mt5Service implements OnModuleInit {
    * Get the trading symbol - tries to detect dynamically, falls back to configured value
    */
   async getTradingSymbol(defaultSymbol: string = 'XAUUSD'): Promise<string> {
-    const detectedSymbol = await this.detectGoldSymbol();
-    return detectedSymbol || defaultSymbol;
+    // Hardcoded to XAUUSDm for now to avoid symbol detection issues
+    return 'XAUUSDm';
   }
 }
