@@ -23,7 +23,12 @@ export class Mt5Controller {
 
   @Get('account')
   @ApiOperation({ summary: 'Get account summary' })
-  async getAccountSummary() {
+  @ApiQuery({ name: 'userId', required: false, description: 'User ID to ensure correct account connection' })
+  async getAccountSummary(@Query('userId') userId?: string) {
+    // If userId provided, ensure we're connected to the right account
+    if (userId) {
+      await this.mt5Service.ensureAccountConnection(userId);
+    }
     const summary = await this.mt5Service.getAccountSummary();
     return { success: true, data: summary };
   }
@@ -31,7 +36,11 @@ export class Mt5Controller {
   @Get('quote')
   @ApiOperation({ summary: 'Get current quote for a symbol' })
   @ApiQuery({ name: 'symbol', required: true, example: 'XAUUSDm' })
-  async getQuote(@Query('symbol') symbol: string) {
+  @ApiQuery({ name: 'userId', required: false, description: 'User ID to ensure correct account connection' })
+  async getQuote(@Query('symbol') symbol: string, @Query('userId') userId?: string) {
+    if (userId) {
+      await this.mt5Service.ensureAccountConnection(userId);
+    }
     const quote = await this.mt5Service.getQuote(symbol);
     return { success: true, data: quote };
   }
@@ -52,7 +61,11 @@ export class Mt5Controller {
 
   @Get('orders')
   @ApiOperation({ summary: 'Get opened orders' })
-  async getOpenedOrders() {
+  @ApiQuery({ name: 'userId', required: false, description: 'User ID to ensure correct account connection' })
+  async getOpenedOrders(@Query('userId') userId?: string) {
+    if (userId) {
+      await this.mt5Service.ensureAccountConnection(userId);
+    }
     const orders = await this.mt5Service.getOpenedOrders();
     return { success: true, data: orders };
   }
@@ -60,14 +73,22 @@ export class Mt5Controller {
   @Get('orders/closed')
   @ApiOperation({ summary: 'Get closed orders history' })
   @ApiQuery({ name: 'days', required: false, example: 30 })
-  async getClosedOrders(@Query('days') days: number = 30) {
+  @ApiQuery({ name: 'userId', required: false, description: 'User ID to ensure correct account connection' })
+  async getClosedOrders(@Query('days') days: number = 30, @Query('userId') userId?: string) {
+    if (userId) {
+      await this.mt5Service.ensureAccountConnection(userId);
+    }
     const orders = await this.mt5Service.getTradeHistory(days);
     return { success: true, data: orders, count: orders.length };
   }
 
   @Get('account/details')
   @ApiOperation({ summary: 'Get detailed account information' })
-  async getAccountDetails() {
+  @ApiQuery({ name: 'userId', required: false, description: 'User ID to ensure correct account connection' })
+  async getAccountDetails(@Query('userId') userId?: string) {
+    if (userId) {
+      await this.mt5Service.ensureAccountConnection(userId);
+    }
     const details = await this.mt5Service.getAccountDetails();
     return { success: true, data: details };
   }

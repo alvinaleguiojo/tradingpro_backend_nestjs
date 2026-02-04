@@ -159,11 +159,59 @@ export class Mt5Service implements OnModuleInit {
   async setCredentials(user: string, password: string, host: string, port: string = '443'): Promise<void> {
     this.dynamicCredentials = { user, password, host, port };
     this.token = null; // Reset token to force reconnection
+    this.currentTokenAccountId = user; // Track which account we're now using
     
     // Persist to database for serverless
     await this.saveCredentialsToDb(user, password, host, port);
     
     this.logger.log(`MT5 credentials set for account ${user}`);
+  }
+
+  /**
+   * Ensure we're connected to the correct account
+   * If currently connected to a different account, switch to the requested one
+   */
+  async ensureAccountConnection(userId: string): Promise<boolean> {
+    // If already connected to this account, we're good
+    if (this.currentTokenAccountId === userId && this.token) {
+      return true;
+    }
+    
+    this.logger.log(`Switching connection from ${this.currentTokenAccountId} to ${userId}`);
+    
+    // Load credentials for this user from database
+    try {
+      const connection = await this.mt5ConnectionModel.findOne({ user: userId }).exec();
+      
+      if (connection && (connection as any).password) {
+        // Switch to this account
+        this.dynamicCredentials = {
+          user: connection.user,
+          password: (connection as any).password,
+          host: connection.host,
+          port: connection.port?.toString() || '443',
+        };
+        this.token = null; // Force reconnection
+        this.currentTokenAccountId = userId;
+        
+        // Connect with new credentials
+        await this.connect();
+        return true;
+      } else {
+        this.logger.warn(`No credentials found in database for user ${userId}`);
+        return false;
+      }
+    } catch (error) {
+      this.logger.error(`Failed to switch account to ${userId}:`, error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Get current connected account ID
+   */
+  getCurrentAccountId(): string | null {
+    return this.currentTokenAccountId;
   }
 
   /**
