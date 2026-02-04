@@ -232,20 +232,12 @@ export class ScalpingStrategyService {
   }
 
   /**
-   * Original analyzeForScalp - kept for reference but renamed
+   * Detect bullish/bearish engulfing pattern
    */
-  analyzeForScalpOriginal(
-    candles: Candle[],
-    currentPrice: number,
-    spread: number = 0,
-  ): TradeSetup | null {
-    if (candles.length < 30) {
-      this.logger.warn(`Not enough candles for scalping: ${candles.length} (need 30+)`);
-      return null;
-    }
-
-    // Log candle data for debugging
-    const lastCandle = candles[candles.length - 1];
+  private detectEngulfing(
+    current: Candle,
+    previous: Candle,
+  ): { direction: 'BUY' | 'SELL'; type: string } | null {
     const currentBody = Math.abs(current.close - current.open);
     const previousBody = Math.abs(previous.close - previous.open);
 
