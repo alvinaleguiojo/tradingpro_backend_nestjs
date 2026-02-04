@@ -396,6 +396,22 @@ export class Mt5Service implements OnModuleInit {
     return creds.user || null;
   }
 
+  /**
+   * Get the REAL connected account ID by calling the MT5 API
+   * This verifies which account the token is actually connected to
+   */
+  async getVerifiedAccountId(): Promise<string | null> {
+    try {
+      const details = await this.getAccountDetails();
+      if (details && details.accountNumber) {
+        return details.accountNumber;
+      }
+    } catch (error) {
+      this.logger.warn(`Failed to verify account ID: ${error.message}`);
+    }
+    return null;
+  }
+
   private async log(
     eventType: TradingEventType,
     message: string,

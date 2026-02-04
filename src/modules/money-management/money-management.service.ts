@@ -281,16 +281,19 @@ export class MoneyManagementService implements OnModuleInit {
    * The caller (auto-trading.service) must ensure ensureMt5ConnectionForAccount is called first.
    */
   async syncWithMt5(accountId: string): Promise<TradingAccountStateDocument> {
-    // Verify we're connected to the correct account
-    const currentMt5Account = this.mt5Service.getCurrentAccountId();
-    if (currentMt5Account && currentMt5Account !== accountId) {
-      this.logger.warn(`MT5 connected to ${currentMt5Account} but trying to sync ${accountId} - using stored state`);
+    // CRITICAL: Verify we're connected to the CORRECT account via API call
+    // This prevents using wrong account's balance due to cached/stale tokens
+    const verifiedAccountId = await this.mt5Service.getVerifiedAccountId();
+    
+    if (!verifiedAccountId || verifiedAccountId !== accountId) {
+      this.logger.warn(`🚨 MT5 token mismatch! Expected: ${accountId}, Actual: ${verifiedAccountId || 'unknown'} - using stored state ONLY`);
       const existingState = await this.accountStateModel.findOne({ accountId }).exec();
       if (existingState) {
+        this.logger.log(`📊 Using stored state for ${accountId}: Balance $${existingState.currentBalance}, Level ${existingState.currentLevel}`);
         return existingState;
       }
       // No existing state and wrong account connected - create with SAFE defaults
-      this.logger.warn(`No existing state for ${accountId} and wrong MT5 account connected - creating safe defaults`);
+      this.logger.warn(`No existing state for ${accountId} and wrong MT5 account connected - creating safe defaults (Level 1, 0.01 lot)`);
       const state = new this.accountStateModel({
         accountId,
         initialBalance: 100,
@@ -308,6 +311,8 @@ export class MoneyManagementService implements OnModuleInit {
       await state.save();
       return state;
     }
+    
+    this.logger.log(`✅ MT5 account verified: ${verifiedAccountId}`);
     
     const accountSummary = await this.mt5Service.getAccountSummary();
     
@@ -394,6 +399,9 @@ export class MoneyManagementService implements OnModuleInit {
     const balance = Number(state.currentBalance);
     const currentLevel = this.getCurrentLevel(balance);
     const nextLevel = this.getNextLevel(balance);
+    
+    // Log the money management decision for debugging
+    this.logger.log(`💰 Money Management for ${accountId}: Balance $${balance.toFixed(2)} → Level ${currentLevel.level} (Lot: ${currentLevel.lotSize})`);
     
     return {
       accountState: state,
