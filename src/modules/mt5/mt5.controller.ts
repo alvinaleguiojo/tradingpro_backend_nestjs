@@ -320,7 +320,7 @@ export class Mt5Controller {
     @Query('userId') userId?: string,
   ) {
     // Ensure we're connected to the right account
-    let connectionResult = null;
+    let connectionResult: boolean | null = null;
     if (userId) {
       connectionResult = await this.mt5Service.ensureAccountConnection(userId);
     }
