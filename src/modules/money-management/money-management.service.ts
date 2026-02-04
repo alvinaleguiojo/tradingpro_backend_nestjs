@@ -289,7 +289,24 @@ export class MoneyManagementService implements OnModuleInit {
       if (existingState) {
         return existingState;
       }
-      // Fall through to create default state
+      // No existing state and wrong account connected - create with SAFE defaults
+      this.logger.warn(`No existing state for ${accountId} and wrong MT5 account connected - creating safe defaults`);
+      const state = new this.accountStateModel({
+        accountId,
+        initialBalance: 100,
+        currentBalance: 100,
+        currentLevel: 1,
+        currentLotSize: 0.01,
+        dailyProfit: 0,
+        weeklyProfit: 0,
+        monthlyProfit: 0,
+        totalProfit: 0,
+        lastTradingDay: new Date(),
+        weekStartDate: this.getWeekStartDate(),
+        monthStartDate: this.getMonthStartDate(),
+      });
+      await state.save();
+      return state;
     }
     
     const accountSummary = await this.mt5Service.getAccountSummary();
