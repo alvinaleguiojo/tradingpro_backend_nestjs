@@ -320,11 +320,22 @@ export class Mt5Controller {
     @Query('userId') userId?: string,
   ) {
     // Ensure we're connected to the right account
+    let connectionResult = null;
     if (userId) {
-      await this.mt5Service.ensureAccountConnection(userId);
+      connectionResult = await this.mt5Service.ensureAccountConnection(userId);
     }
+    const currentAccount = this.mt5Service.getCurrentAccountId();
     const history = await this.mt5Service.getTradeHistory(days);
-    return { success: true, data: history, count: history.length };
+    return { 
+      success: true, 
+      data: history, 
+      count: history.length,
+      debug: {
+        requestedUserId: userId,
+        connectionResult,
+        currentConnectedAccount: currentAccount,
+      }
+    };
   }
 
   @Get('deals')
