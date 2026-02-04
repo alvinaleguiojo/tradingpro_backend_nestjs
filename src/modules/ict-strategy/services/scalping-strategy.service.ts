@@ -24,7 +24,7 @@ export interface ScalpingConfig {
 
 // Aggressive scalping defaults for XAU/USD
 const AGGRESSIVE_SCALPING_CONFIG: ScalpingConfig = {
-  minConfidence: 30,              // Increased from 20 - require at least 2 signals or 1 strong signal
+  minConfidence: 20,              // Minimum confidence to trade (more aggressive)
   minRiskReward: 1.5,             // Increased from 1.2 - better reward
   maxSpreadPips: 30,              // Max 30 pips spread for gold
   
