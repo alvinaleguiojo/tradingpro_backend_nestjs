@@ -1157,92 +1157,20 @@ export class Mt5Service implements OnModuleInit {
   async getTradeHistory(days: number = 30): Promise<any> {
     await this.checkConnection();
 
-    const results: any = {
-      dateRange: { from: '', to: '' },
-      closedOrders: null,
-      closedOrdersError: null,
-      historyPositions: null,
-      historyPositionsError: null,
-      orderHistory: null,
-      orderHistoryError: null,
-      historyDeals: null,
-      historyDealsError: null,
-    };
-
     try {
-      // Calculate date range
-      const dateTo = new Date();
-      const dateFrom = new Date();
-      dateFrom.setDate(dateFrom.getDate() - days);
+      // Use /ClosedOrders - the most reliable endpoint for closed trades
+      const closedResponse = await this.axiosClient.get('/ClosedOrders', {
+        params: { id: this.token },
+      });
       
-      const fromDateStr = dateFrom.toISOString().split('T')[0];
-      const toDateStr = dateTo.toISOString().split('T')[0];
-      results.dateRange = { from: fromDateStr, to: toDateStr };
-
-      // 1. Try /ClosedOrders (last 100 orders closed during current session)
-      try {
-        const closedResponse = await this.axiosClient.get('/ClosedOrders', {
-          params: { id: this.token },
-        });
-        results.closedOrders = closedResponse.data;
-        this.logger.log(`ClosedOrders returned ${Array.isArray(closedResponse.data) ? closedResponse.data.length : 'object'}`);
-      } catch (e) {
-        results.closedOrdersError = e.message;
-        this.logger.warn('ClosedOrders failed:', e.message);
-      }
-
-      // 2. Try /HistoryPositionsByCloseTime
-      try {
-        const positionsResponse = await this.axiosClient.get('/HistoryPositionsByCloseTime', {
-          params: {
-            id: this.token,
-            from: fromDateStr,
-            to: toDateStr,
-          },
-        });
-        results.historyPositions = positionsResponse.data;
-        this.logger.log(`HistoryPositionsByCloseTime returned ${Array.isArray(positionsResponse.data) ? positionsResponse.data.length : 'object'}`);
-      } catch (e) {
-        results.historyPositionsError = e.message;
-        this.logger.warn('HistoryPositionsByCloseTime failed:', e.message);
-      }
-
-      // 3. Try /OrderHistory
-      try {
-        const orderHistoryResponse = await this.axiosClient.get('/OrderHistory', {
-          params: {
-            id: this.token,
-            from: fromDateStr,
-            to: toDateStr,
-          },
-        });
-        results.orderHistory = orderHistoryResponse.data;
-        this.logger.log(`OrderHistory returned data`);
-      } catch (e) {
-        results.orderHistoryError = e.message;
-        this.logger.warn('OrderHistory failed:', e.message);
-      }
-
-      // 4. Try /HistoryDeals
-      try {
-        const dealsResponse = await this.axiosClient.get('/HistoryDeals', {
-          params: {
-            id: this.token,
-            from: fromDateStr,
-            to: toDateStr,
-          },
-        });
-        results.historyDeals = dealsResponse.data;
-        this.logger.log(`HistoryDeals returned ${Array.isArray(dealsResponse.data) ? dealsResponse.data.length : 'object'}`);
-      } catch (e) {
-        results.historyDealsError = e.message;
-        this.logger.warn('HistoryDeals failed:', e.message);
-      }
-
-      return results;
+      const closedOrders = closedResponse.data || [];
+      this.logger.log(`Fetched ${Array.isArray(closedOrders) ? closedOrders.length : 0} closed orders`);
+      
+      // Return in a consistent format
+      return Array.isArray(closedOrders) ? closedOrders : [];
     } catch (error) {
-      this.logger.error('Failed to get trade history', error);
-      return { ...results, fatalError: error.message };
+      this.logger.error('Failed to get trade history from ClosedOrders:', error.message);
+      return [];
     }
   }
 
