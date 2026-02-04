@@ -77,6 +77,7 @@ export class Mt5Service implements OnModuleInit {
   private readonly REQUEST_TIMEOUT = 15000; // 15 seconds for data requests
   private lastTokenValidation: number = 0;
   private readonly TOKEN_VALIDATION_INTERVAL = 60000; // Revalidate token every 60s
+  private currentTokenAccountId: string | null = null; // Track which account the current token belongs to
 
   constructor(
     private configService: ConfigService,
@@ -176,7 +177,15 @@ export class Mt5Service implements OnModuleInit {
     port: string = '443',
     cachedToken?: string,
   ): Promise<void> {
+    // CRITICAL: If switching to a different account, invalidate the cached token validation
+    if (this.currentTokenAccountId && this.currentTokenAccountId !== user) {
+      this.logger.log(`Switching account from ${this.currentTokenAccountId} to ${user} - invalidating token cache`);
+      this.lastTokenValidation = 0; // Force revalidation
+      this.token = null; // Clear the old account's token
+    }
+    
     this.dynamicCredentials = { user, password, host, port };
+    this.currentTokenAccountId = user; // Track which account we're now using
     
     // If a cached token is provided and valid, use it
     if (cachedToken && this.isValidToken(cachedToken)) {
@@ -460,6 +469,8 @@ export class Mt5Service implements OnModuleInit {
       // Validate the response is a valid UUID token, not an error object
       if (response.data && this.isValidToken(response.data)) {
         this.token = response.data;
+        this.currentTokenAccountId = user; // Track which account this token belongs to
+        this.lastTokenValidation = Date.now(); // Mark as validated now
         
         // Save connection info
         let connection = await this.mt5ConnectionModel.findOne({ user }).exec();
@@ -547,8 +558,18 @@ export class Mt5Service implements OnModuleInit {
   }
 
   async checkConnection(): Promise<boolean> {
-    // If we have a token and it was validated recently, skip validation
     const now = Date.now();
+    const currentAccount = this.dynamicCredentials?.user;
+    
+    // CRITICAL: Ensure token belongs to the current account
+    // If we're trying to use a token from a different account, force reconnection
+    if (this.token && this.currentTokenAccountId && currentAccount && this.currentTokenAccountId !== currentAccount) {
+      this.logger.warn(`Token mismatch: token for ${this.currentTokenAccountId} but need ${currentAccount} - forcing reconnect`);
+      this.token = null;
+      this.lastTokenValidation = 0;
+    }
+    
+    // If we have a valid token for the current account and it was validated recently, skip validation
     if (this.token && (now - this.lastTokenValidation) < this.TOKEN_VALIDATION_INTERVAL) {
       return true;
     }
@@ -562,6 +583,12 @@ export class Mt5Service implements OnModuleInit {
       // No token in DB, need to connect
       await this.loadCredentialsFromDb();
       await this.connect();
+      
+      // Update the account ID after connecting
+      if (this.token && currentAccount) {
+        this.currentTokenAccountId = currentAccount;
+      }
+      
       return !!this.token;
     }
 
@@ -575,6 +602,11 @@ export class Mt5Service implements OnModuleInit {
       if (response.data?.connected === false) {
         this.token = null;
         await this.connect();
+        
+        // Update the account ID after reconnecting
+        if (this.token && currentAccount) {
+          this.currentTokenAccountId = currentAccount;
+        }
       } else {
         this.lastTokenValidation = now;
       }
@@ -584,6 +616,12 @@ export class Mt5Service implements OnModuleInit {
       this.logger.warn('Connection check failed, attempting reconnect');
       this.token = null;
       await this.connect();
+      
+      // Update the account ID after reconnecting
+      if (this.token && currentAccount) {
+        this.currentTokenAccountId = currentAccount;
+      }
+      
       return !!this.token;
     }
   }
@@ -630,6 +668,7 @@ export class Mt5Service implements OnModuleInit {
         const tokenAge = Date.now() - connection.lastConnectedAt.getTime();
         if (tokenAge < 30 * 60 * 1000) { // 30 minutes
           this.token = connection.token;
+          this.currentTokenAccountId = connection.user; // Track which account this token belongs to
           // Only update dynamicCredentials if not already set (avoid overwriting intended account)
           if (!this.dynamicCredentials?.user) {
             this.dynamicCredentials = {
