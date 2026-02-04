@@ -3,12 +3,14 @@ import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { v4 as uuidv4 } from 'uuid';
 import { TradingService } from './trading.service';
 import { Mt5Service } from '../mt5/mt5.service';
 import { TradingEventType } from '../../schemas/trading-log.schema';
 import { Trade, TradeDocument } from '../../schemas/trade.schema';
 import { Mt5Connection, Mt5ConnectionDocument } from '../../schemas/mt5-connection.schema';
 import { TradingSignalDocument } from '../../schemas/trading-signal.schema';
+import { TradeLock, TradeLockDocument } from '../../schemas/trade-lock.schema';
 
 @Injectable()
 export class AutoTradingService implements OnModuleInit {
@@ -22,6 +24,8 @@ export class AutoTradingService implements OnModuleInit {
   // Track last trade time per account to enforce cooldown
   private lastTradeTime: Map<string, number> = new Map();
   private readonly TRADE_COOLDOWN_MS = 60000; // 1 minute cooldown between trades per account
+  private readonly CYCLE_LOCK_TIMEOUT_MS = 120000; // 2 minute cycle lock timeout
+  private readonly CYCLE_LOCK_ID = 'GLOBAL_TRADING_CYCLE'; // Special ID for cycle lock
 
   constructor(
     private configService: ConfigService,
@@ -29,6 +33,8 @@ export class AutoTradingService implements OnModuleInit {
     private mt5Service: Mt5Service,
     @InjectModel(Mt5Connection.name)
     private mt5ConnectionModel: Model<Mt5ConnectionDocument>,
+    @InjectModel(TradeLock.name)
+    private tradeLockModel: Model<TradeLockDocument>,
   ) {
     // Initialize from environment variable
     this.isEnabled = this.configService.get('AUTO_TRADING_ENABLED', 'true') === 'true';
@@ -42,6 +48,81 @@ export class AutoTradingService implements OnModuleInit {
     // Run initial analysis on startup (after a delay to ensure MT5 connection)
     if (this.isEnabled) {
       setTimeout(() => this.runTradingCycle(), 10000);
+    }
+  }
+
+  /**
+   * Acquire a distributed lock for the entire trading cycle
+   * This prevents multiple serverless instances from running cycles simultaneously
+   */
+  private async acquireCycleLock(): Promise<string | null> {
+    const lockId = uuidv4();
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + this.CYCLE_LOCK_TIMEOUT_MS);
+
+    try {
+      // Try to create a new cycle lock
+      try {
+        await this.tradeLockModel.create({
+          accountId: this.CYCLE_LOCK_ID,
+          lockId,
+          lockedAt: now,
+          expiresAt,
+          released: false,
+        });
+        this.logger.log(`🔒 Acquired GLOBAL cycle lock: ${lockId.substring(0, 8)}`);
+        return lockId;
+      } catch (createError: any) {
+        if (createError.code !== 11000) {
+          throw createError;
+        }
+      }
+
+      // Lock exists - try to acquire if released or expired
+      const result = await this.tradeLockModel.findOneAndUpdate(
+        {
+          accountId: this.CYCLE_LOCK_ID,
+          $or: [
+            { released: true },
+            { expiresAt: { $lt: now } },
+          ],
+        },
+        {
+          $set: {
+            lockId,
+            lockedAt: now,
+            expiresAt,
+            released: false,
+          },
+        },
+        { new: true },
+      );
+
+      if (result && result.lockId === lockId) {
+        this.logger.log(`🔒 Acquired EXISTING cycle lock: ${lockId.substring(0, 8)}`);
+        return lockId;
+      }
+
+      this.logger.log(`⏳ Cycle lock held by another instance - skipping this cycle`);
+      return null;
+    } catch (error: any) {
+      this.logger.error(`Cycle lock error: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Release the cycle lock
+   */
+  private async releaseCycleLock(lockId: string): Promise<void> {
+    try {
+      await this.tradeLockModel.updateOne(
+        { accountId: this.CYCLE_LOCK_ID, lockId },
+        { $set: { released: true } },
+      );
+      this.logger.log(`🔓 Released cycle lock: ${lockId.substring(0, 8)}`);
+    } catch (error: any) {
+      this.logger.warn(`Failed to release cycle lock: ${error.message}`);
     }
   }
 
@@ -235,15 +316,24 @@ export class AutoTradingService implements OnModuleInit {
   /**
    * Run the complete trading cycle for ALL accounts
    * IMPORTANT: Generate signal ONCE and apply to all accounts for consistency
+   * Uses distributed locking to prevent multiple serverless instances from running simultaneously
    */
   async runTradingCycle(): Promise<void> {
     if (this.isRunning) {
-      this.logger.warn('Trading cycle already running, skipping...');
+      this.logger.warn('Trading cycle already running (local), skipping...');
       return;
     }
 
     if (!this.isEnabled) {
       this.logger.log('Auto trading is disabled');
+      return;
+    }
+
+    // ===== ACQUIRE DISTRIBUTED CYCLE LOCK =====
+    // This prevents multiple Vercel serverless instances from running cycles at the same time
+    const cycleLockId = await this.acquireCycleLock();
+    if (!cycleLockId) {
+      this.logger.log('⏳ Another instance is running the trading cycle - skipping');
       return;
     }
 
@@ -259,6 +349,8 @@ export class AutoTradingService implements OnModuleInit {
       
       if (accounts.length === 0) {
         this.logger.warn('No MT5 accounts found in database');
+        this.isRunning = false;
+        await this.releaseCycleLock(cycleLockId);
         return;
       }
 
@@ -285,6 +377,8 @@ export class AutoTradingService implements OnModuleInit {
           `Trading cycle completed - No signal generated`,
           { accountCount: accounts.length, duration: Date.now() - startTime },
         );
+        this.isRunning = false;
+        await this.releaseCycleLock(cycleLockId);
         return;
       }
 
@@ -295,6 +389,8 @@ export class AutoTradingService implements OnModuleInit {
       
       if (masterSignal.signalType === 'HOLD' || masterSignal.confidence < minConfidence) {
         this.logger.log(`⏸️ Signal not actionable: ${masterSignal.signalType} with ${masterSignal.confidence}% confidence`);
+        this.isRunning = false;
+        await this.releaseCycleLock(cycleLockId);
         return;
       }
 
@@ -372,6 +468,8 @@ export class AutoTradingService implements OnModuleInit {
       );
     } finally {
       this.isRunning = false;
+      // Release the distributed cycle lock
+      await this.releaseCycleLock(cycleLockId);
     }
   }
 
