@@ -1313,4 +1313,19 @@ export class Mt5Service implements OnModuleInit {
     // Hardcoded to XAUUSDm for now to avoid symbol detection issues
     return 'XAUUSDm';
   }
+
+  /**
+   * Search for brokers by company name
+   */
+  async searchBrokers(companyName: string): Promise<any[]> {
+    try {
+      const response = await this.axiosClient.get('/Search', {
+        params: { company: companyName },
+      });
+      return response.data || [];
+    } catch (error) {
+      this.logger.error(`Failed to search brokers for ${companyName}`, error);
+      return [];
+    }
+  }
 }

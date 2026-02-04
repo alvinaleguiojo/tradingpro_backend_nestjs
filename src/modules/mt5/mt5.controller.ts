@@ -57,6 +57,29 @@ export class Mt5Controller {
     return { success: true, data: orders };
   }
 
+  @Get('orders/closed')
+  @ApiOperation({ summary: 'Get closed orders history' })
+  @ApiQuery({ name: 'days', required: false, example: 30 })
+  async getClosedOrders(@Query('days') days: number = 30) {
+    const orders = await this.mt5Service.getTradeHistory(days);
+    return { success: true, data: orders, count: orders.length };
+  }
+
+  @Get('account/details')
+  @ApiOperation({ summary: 'Get detailed account information' })
+  async getAccountDetails() {
+    const details = await this.mt5Service.getAccountDetails();
+    return { success: true, data: details };
+  }
+
+  @Get('brokers/search')
+  @ApiOperation({ summary: 'Search for brokers by company name' })
+  @ApiQuery({ name: 'company', required: true, example: 'Exness' })
+  async searchBrokers(@Query('company') company: string) {
+    const results = await this.mt5Service.searchBrokers(company);
+    return { success: true, data: results };
+  }
+
   @Get('orders/symbol')
   @ApiOperation({ summary: 'Get opened orders for a specific symbol' })
   @ApiQuery({ name: 'symbol', required: true, example: 'XAUUSDm' })
