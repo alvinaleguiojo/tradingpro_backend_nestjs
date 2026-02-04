@@ -78,88 +78,124 @@ export class ScalpingStrategyService {
     const reasons: string[] = [];
     const confluences: string[] = [];
     let confidence = 0;
-    let direction: 'BUY' | 'SELL' | null = null;
 
     const prevCandle = candles[candles.length - 2];
     const prev2Candle = candles[candles.length - 3];
 
-    // === SCALPING SIGNAL 1: Engulfing Pattern (Strong reversal) ===
+    // Collect all signals first, then determine direction by priority/weight
+    const buySignals: { name: string; weight: number }[] = [];
+    const sellSignals: { name: string; weight: number }[] = [];
+
+    // === SCALPING SIGNAL 1: Engulfing Pattern (Strong reversal - HIGH PRIORITY) ===
     const engulfing = this.detectEngulfing(lastCandle, prevCandle);
     if (engulfing) {
-      direction = engulfing.direction;
-      reasons.push(`${engulfing.type} engulfing pattern`);
-      confidence += 30;
+      if (engulfing.direction === 'BUY') {
+        buySignals.push({ name: `${engulfing.type} engulfing pattern`, weight: 35 });
+      } else {
+        sellSignals.push({ name: `${engulfing.type} engulfing pattern`, weight: 35 });
+      }
       this.logger.log(`✓ Engulfing detected: ${engulfing.type} ${engulfing.direction}`);
     }
 
-    // === SCALPING SIGNAL 2: Pin Bar / Rejection ===
+    // === SCALPING SIGNAL 2: Pin Bar / Rejection (HIGH PRIORITY - reversal signal) ===
     const pinBar = this.detectPinBar(lastCandle);
     if (pinBar) {
-      if (!direction) direction = pinBar.direction;
-      if (direction === pinBar.direction) {
-        reasons.push(`Pin bar rejection (${pinBar.type})`);
-        confidence += 25;
-        this.logger.log(`✓ Pin bar detected: ${pinBar.type} ${pinBar.direction}`);
+      if (pinBar.direction === 'BUY') {
+        buySignals.push({ name: `Pin bar rejection (${pinBar.type})`, weight: 30 });
+      } else {
+        sellSignals.push({ name: `Pin bar rejection (${pinBar.type})`, weight: 30 });
       }
+      this.logger.log(`✓ Pin bar detected: ${pinBar.type} ${pinBar.direction}`);
     }
 
-    // === SCALPING SIGNAL 3: Three Candle Momentum ===
+    // === SCALPING SIGNAL 3: Three Candle Momentum (LOWER PRIORITY - often lagging) ===
     const momentum = this.detectMomentum(candles.slice(-5));
     if (momentum) {
-      if (!direction) direction = momentum.direction;
-      if (direction === momentum.direction) {
-        reasons.push(`Strong ${momentum.direction} momentum`);
-        confidence += 20;
-        this.logger.log(`✓ Momentum detected: ${momentum.direction}`);
+      if (momentum.direction === 'BUY') {
+        buySignals.push({ name: `Strong BUY momentum`, weight: 15 });
+      } else {
+        sellSignals.push({ name: `Strong SELL momentum`, weight: 15 });
       }
+      this.logger.log(`✓ Momentum detected: ${momentum.direction}`);
     }
 
-    // === SCALPING SIGNAL 4: Double Top/Bottom (Quick reversal) ===
+    // === SCALPING SIGNAL 4: Double Top/Bottom (Quick reversal - HIGH PRIORITY) ===
     const doublePattern = this.detectDoubleTopBottom(candles.slice(-20), currentPrice);
     if (doublePattern) {
-      if (!direction) direction = doublePattern.direction;
-      if (direction === doublePattern.direction) {
-        reasons.push(`${doublePattern.type} pattern at ${doublePattern.level.toFixed(2)}`);
-        confidence += 25;
+      if (doublePattern.direction === 'BUY') {
+        buySignals.push({ name: `${doublePattern.type} pattern at ${doublePattern.level.toFixed(2)}`, weight: 30 });
+      } else {
+        sellSignals.push({ name: `${doublePattern.type} pattern at ${doublePattern.level.toFixed(2)}`, weight: 30 });
       }
     }
 
-    // === SCALPING SIGNAL 5: Quick Liquidity Grab ===
+    // === SCALPING SIGNAL 5: Quick Liquidity Grab (HIGHEST PRIORITY - institutional) ===
     const liquidityGrab = this.detectQuickLiquidityGrab(candles.slice(-10));
     if (liquidityGrab) {
-      if (!direction) direction = liquidityGrab.direction;
-      if (direction === liquidityGrab.direction) {
-        reasons.push(`Liquidity grab ${liquidityGrab.type}`);
-        confidence += 30;
+      if (liquidityGrab.direction === 'BUY') {
+        buySignals.push({ name: `Liquidity grab ${liquidityGrab.type}`, weight: 35 });
+      } else {
+        sellSignals.push({ name: `Liquidity grab ${liquidityGrab.type}`, weight: 35 });
       }
     }
 
-    // === SCALPING SIGNAL 6: EMA Cross (Fast momentum) ===
+    // === SCALPING SIGNAL 6: EMA Cross (confirmation signal) ===
     const emaCross = this.detectEMACross(candles.slice(-20));
     if (emaCross) {
-      if (!direction) direction = emaCross.direction;
-      if (direction === emaCross.direction) {
-        confluences.push(`EMA crossover confirmation`);
-        confidence += 15;
+      if (emaCross.direction === 'BUY') {
+        buySignals.push({ name: `EMA crossover`, weight: 10 });
       } else {
-        confidence -= 10; // Penalty for going against EMA
+        sellSignals.push({ name: `EMA crossover`, weight: 10 });
       }
     }
 
-    // === SCALPING SIGNAL 7: RSI Extremes ===
+    // === SCALPING SIGNAL 7: RSI Extremes (reversal signal) ===
     const rsiSignal = this.checkRSI(candles.slice(-14));
     if (rsiSignal) {
-      if (!direction) direction = rsiSignal.direction;
-      if (direction === rsiSignal.direction) {
-        confluences.push(`RSI ${rsiSignal.condition} (${rsiSignal.value.toFixed(0)})`);
-        confidence += 15;
+      if (rsiSignal.direction === 'BUY') {
+        buySignals.push({ name: `RSI ${rsiSignal.condition} (${rsiSignal.value.toFixed(0)})`, weight: 20 });
+      } else {
+        sellSignals.push({ name: `RSI ${rsiSignal.condition} (${rsiSignal.value.toFixed(0)})`, weight: 20 });
       }
     }
 
-    // No clear direction
-    if (!direction) {
-      this.logger.log(`No scalping signal - no pattern detected. Checked: engulfing, pinBar, momentum, doublePattern, liquidityGrab`);
+    // Calculate total weight for each direction
+    const buyWeight = buySignals.reduce((sum, s) => sum + s.weight, 0);
+    const sellWeight = sellSignals.reduce((sum, s) => sum + s.weight, 0);
+
+    this.logger.log(`Signal weights - BUY: ${buyWeight} (${buySignals.length} signals), SELL: ${sellWeight} (${sellSignals.length} signals)`);
+
+    // Determine direction based on which side has more weight
+    // Require a minimum difference to avoid conflicting signals
+    const minWeightDifference = 10;
+    let direction: 'BUY' | 'SELL' | null = null;
+    
+    if (buyWeight > sellWeight + minWeightDifference) {
+      direction = 'BUY';
+      reasons.push(...buySignals.map(s => s.name));
+      confidence = buyWeight;
+    } else if (sellWeight > buyWeight + minWeightDifference) {
+      direction = 'SELL';
+      reasons.push(...sellSignals.map(s => s.name));
+      confidence = sellWeight;
+    } else if (buyWeight > 0 || sellWeight > 0) {
+      // Conflicting signals - no clear direction
+      this.logger.log(`⏸️ Conflicting signals - BUY weight: ${buyWeight}, SELL weight: ${sellWeight}`);
       return null;
+    }
+
+    // No signals at all
+    if (!direction) {
+      this.logger.log(`No scalping signal - no pattern detected. Checked: engulfing, pinBar, momentum, doublePattern, liquidityGrab, emaCross, rsi`);
+      return null;
+    }
+
+    // Add EMA as confluence if it confirms direction
+    if (emaCross && emaCross.direction === direction) {
+      confluences.push(`EMA crossover confirmation`);
+    } else if (emaCross && emaCross.direction !== direction) {
+      confidence -= 10; // Penalty for going against EMA
+      this.logger.log(`⚠️ Trading against EMA trend - confidence reduced`);
     }
 
     // Check minimum confidence
