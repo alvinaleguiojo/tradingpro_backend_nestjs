@@ -157,7 +157,7 @@ export class AutoTradingService implements OnModuleInit {
    * Loads credentials from database, connects, and updates token
    */
   private async ensureMt5ConnectionForAccount(connection: Mt5ConnectionDocument): Promise<void> {
-    try:
+    try {
       if (!connection.user || !(connection as any).password || !connection.host) {
         throw new Error(`Incomplete MT5 credentials for account ${connection.user}`);
       }
