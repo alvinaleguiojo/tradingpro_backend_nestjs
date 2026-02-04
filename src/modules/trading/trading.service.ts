@@ -600,12 +600,36 @@ export class TradingService implements OnModuleInit {
         `LotSize ${lotSize}, Daily Target Progress: ${mmStatus.dailyTargetProgress.toFixed(1)}%`
       );
 
+      // ===== CRITICAL: VERIFY MT5 CONNECTION STILL MATCHES OUR ACCOUNT =====
+      // In serverless environment, the MT5 connection might have been switched to a different account
+      const currentConnectedAccount = this.mt5Service.getCurrentAccountId();
+      if (currentConnectedAccount !== accountId) {
+        this.logger.warn(`🚨 MT5 connection mismatch! Expected: ${accountId}, Got: ${currentConnectedAccount}. Aborting trade.`);
+        await this.logEvent(
+          TradingEventType.ERROR,
+          `Trade aborted: MT5 connection switched to different account`,
+          { expectedAccount: accountId, actualAccount: currentConnectedAccount },
+          'error',
+          accountId,
+        );
+        await this.releaseTradeLock(accountId, lockId);
+        return null;
+      }
+
       // Check max positions - each account should only have 1 open position at a time
       const maxPositions = 1;
       const allOpenOrders = await this.mt5Service.getOpenedOrders();
       
+      // Double-check account is still correct after MT5 API call
+      const postCheckAccount = this.mt5Service.getCurrentAccountId();
+      if (postCheckAccount !== accountId) {
+        this.logger.warn(`🚨 MT5 connection switched during order check! Expected: ${accountId}, Got: ${postCheckAccount}. Aborting.`);
+        await this.releaseTradeLock(accountId, lockId);
+        return null;
+      }
+      
       if (allOpenOrders.length >= maxPositions) {
-        this.logger.log(`Max positions reached for account: ${allOpenOrders.length}/${maxPositions} (limit 1 per account)`);
+        this.logger.log(`Max positions reached for account ${accountId}: ${allOpenOrders.length}/${maxPositions} (limit 1 per account)`);
         await this.logEvent(
           TradingEventType.CRON_EXECUTION,
           `Trade skipped: Max positions reached (${allOpenOrders.length}/${maxPositions})`,
@@ -631,6 +655,35 @@ export class TradingService implements OnModuleInit {
       }
 
       // Lot size already determined by money management above
+
+      // ===== FINAL SAFETY CHECK: Verify account JUST before placing order =====
+      const preOrderAccount = this.mt5Service.getCurrentAccountId();
+      if (preOrderAccount !== accountId) {
+        this.logger.error(`🚨 CRITICAL: Account mismatch just before order! Expected: ${accountId}, Got: ${preOrderAccount}`);
+        await this.logEvent(
+          TradingEventType.ERROR,
+          `Trade aborted at order stage: Account mismatch`,
+          { expectedAccount: accountId, actualAccount: preOrderAccount },
+          'error',
+          accountId,
+        );
+        await this.releaseTradeLock(accountId, lockId);
+        return null;
+      }
+
+      // ===== FINAL CHECK: Re-verify open orders immediately before placing trade =====
+      const finalOrderCheck = await this.mt5Service.getOpenedOrders();
+      if (finalOrderCheck.length >= maxPositions) {
+        this.logger.warn(`🚨 Final check: Open orders detected (${finalOrderCheck.length}). Aborting duplicate trade.`);
+        await this.logEvent(
+          TradingEventType.CRON_EXECUTION,
+          `Trade aborted: Last-second order check found ${finalOrderCheck.length} open positions`,
+          { accountId, openPositions: finalOrderCheck.length },
+          'info',
+        );
+        await this.releaseTradeLock(accountId, lockId);
+        return null;
+      }
 
       // Send order to MT5
       const direction = signal.signalType === SignalType.BUY ? 'BUY' : 'SELL';
