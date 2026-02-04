@@ -25,20 +25,20 @@ export interface ScalpingConfig {
 // ULTRA AGGRESSIVE scalping defaults for XAU/USD
 // Optimized for quick in-and-out trades with tight risk management
 const AGGRESSIVE_SCALPING_CONFIG: ScalpingConfig = {
-  minConfidence: 15,              // Very aggressive - take more trades
-  minRiskReward: 1.2,             // Lower R:R for more frequent wins
-  maxSpreadPips: 40,              // Allow slightly higher spread
+  minConfidence: 10,              // VERY LOW - take almost any setup
+  minRiskReward: 1.0,             // 1:1 minimum for maximum entries
+  maxSpreadPips: 50,              // Allow higher spread during volatile times
   
-  stopLossPips: 30,               // TIGHT 30 pip stop ($3 on 0.01 lot) - quick cut losses
-  takeProfitPips: 50,             // Quick 50 pip TP ($5 on 0.01 lot) - take profits fast
-  trailingStopPips: 20,           // Tight trailing to lock profits
+  stopLossPips: 25,               // TIGHT 25 pip stop - quick cut losses
+  takeProfitPips: 40,             // Quick 40 pip TP - 1.6 R:R
+  trailingStopPips: 15,           // Very tight trailing
   
   usePartialTakeProfit: true,
   partialProfitPercent: 50,       // Close 50% at first target
-  breakEvenAtProfit: 20,          // Move to BE quickly after 20 pips
+  breakEvenAtProfit: 15,          // Move to BE quickly after 15 pips
   
   onlyTradeDuringKillZones: false, // Trade any time for scalping
-  allowCounterTrend: false,        // Only trade with trend for higher win rate
+  allowCounterTrend: true,         // ALLOW counter-trend for more trades
 };
 
 @Injectable()
@@ -47,192 +47,157 @@ export class ScalpingStrategyService {
   private config: ScalpingConfig = AGGRESSIVE_SCALPING_CONFIG;
 
   /**
-   * Analyze for aggressive scalping opportunities
-   * Focuses on momentum, quick reversals, and tight entries
+   * AGGRESSIVE MOMENTUM SCALPING
+   * Simple strategy: Follow the short-term momentum with tight stops
+   * Focus: Quick entries, small wins, cut losses fast
    */
   analyzeForScalp(
     candles: Candle[],
     currentPrice: number,
     spread: number = 0,
   ): TradeSetup | null {
-    if (candles.length < 30) {
-      this.logger.warn(`Not enough candles for scalping: ${candles.length} (need 30+)`);
+    if (candles.length < 20) {
+      this.logger.warn(`Not enough candles for scalping: ${candles.length} (need 20+)`);
       return null;
     }
 
     // Log candle data for debugging
     const lastCandle = candles[candles.length - 1];
-    this.logger.log(`Analyzing ${candles.length} candles. Last candle: O=${lastCandle.open?.toFixed(2)} H=${lastCandle.high?.toFixed(2)} L=${lastCandle.low?.toFixed(2)} C=${lastCandle.close?.toFixed(2)}`);
+    const prevCandle = candles[candles.length - 2];
+    this.logger.log(`🔍 Analyzing ${candles.length} candles. Current: ${currentPrice.toFixed(2)}, Last close: ${lastCandle.close?.toFixed(2)}`);
 
     // Validate candle data
     if (!lastCandle.open || !lastCandle.high || !lastCandle.low || !lastCandle.close) {
-      this.logger.error(`Invalid candle data - missing OHLC values: ${JSON.stringify(lastCandle)}`);
+      this.logger.error(`Invalid candle data`);
       return null;
     }
 
-    // Check spread
+    // Check spread - but be lenient
     if (spread > this.config.maxSpreadPips) {
-      this.logger.debug(`Spread too high: ${spread} pips (max: ${this.config.maxSpreadPips})`);
+      this.logger.debug(`Spread too high: ${spread} pips`);
       return null;
     }
 
     const reasons: string[] = [];
     const confluences: string[] = [];
     let confidence = 0;
+    let direction: 'BUY' | 'SELL' | null = null;
 
-    const prevCandle = candles[candles.length - 2];
-    const prev2Candle = candles[candles.length - 3];
+    // ===== SIMPLE MOMENTUM DETECTION =====
+    // Look at the last 3-5 candles to determine direction
+    const last5 = candles.slice(-5);
+    const last3 = candles.slice(-3);
+    
+    // Calculate simple momentum: compare current price to 5-candle average
+    const avg5 = last5.reduce((sum, c) => sum + c.close, 0) / 5;
+    const avg3 = last3.reduce((sum, c) => sum + c.close, 0) / 3;
+    const priceVsAvg5 = ((currentPrice - avg5) / avg5) * 100;
+    const priceVsAvg3 = ((currentPrice - avg3) / avg3) * 100;
 
-    // Collect all signals first, then determine direction by priority/weight
-    const buySignals: { name: string; weight: number }[] = [];
-    const sellSignals: { name: string; weight: number }[] = [];
+    this.logger.log(`📊 Price vs AVG5: ${priceVsAvg5.toFixed(3)}%, vs AVG3: ${priceVsAvg3.toFixed(3)}%`);
 
-    // === SCALPING SIGNAL 1: Engulfing Pattern (Strong reversal - HIGH PRIORITY) ===
+    // ===== SIGNAL 1: SIMPLE MOMENTUM (Most Important) =====
+    // If price is moving away from the average, follow it
+    const momentumThreshold = 0.015; // 0.015% = ~$0.75 on Gold
+    
+    if (priceVsAvg3 > momentumThreshold && priceVsAvg5 > 0) {
+      direction = 'BUY';
+      confidence += 40;
+      reasons.push(`Price above 3-candle avg (+${priceVsAvg3.toFixed(3)}%)`);
+      this.logger.log(`✅ BULLISH momentum: Price > AVG3`);
+    } else if (priceVsAvg3 < -momentumThreshold && priceVsAvg5 < 0) {
+      direction = 'SELL';
+      confidence += 40;
+      reasons.push(`Price below 3-candle avg (${priceVsAvg3.toFixed(3)}%)`);
+      this.logger.log(`✅ BEARISH momentum: Price < AVG3`);
+    }
+
+    // ===== SIGNAL 2: CANDLE DIRECTION =====
+    // Last 2-3 candles moving in same direction = confirmation
+    const lastBullish = lastCandle.close > lastCandle.open;
+    const prevBullish = prevCandle.close > prevCandle.open;
+    
+    if (lastBullish && prevBullish) {
+      if (direction === 'BUY') {
+        confidence += 25;
+        confluences.push('2 bullish candles');
+      } else if (!direction) {
+        direction = 'BUY';
+        confidence += 30;
+        reasons.push('2 consecutive bullish candles');
+      }
+    } else if (!lastBullish && !prevBullish) {
+      if (direction === 'SELL') {
+        confidence += 25;
+        confluences.push('2 bearish candles');
+      } else if (!direction) {
+        direction = 'SELL';
+        confidence += 30;
+        reasons.push('2 consecutive bearish candles');
+      }
+    }
+
+    // ===== SIGNAL 3: BREAKOUT DETECTION =====
+    // Price breaking recent high/low = strong momentum
+    const recentHigh = Math.max(...candles.slice(-10).map(c => c.high));
+    const recentLow = Math.min(...candles.slice(-10).map(c => c.low));
+    const range = recentHigh - recentLow;
+    
+    if (currentPrice > recentHigh - (range * 0.1)) {
+      // Near or breaking recent high
+      if (direction === 'BUY') {
+        confidence += 20;
+        confluences.push('Breaking recent high');
+      } else if (!direction) {
+        direction = 'BUY';
+        confidence += 35;
+        reasons.push('Price at 10-candle high');
+      }
+      this.logger.log(`📈 Price near 10-candle HIGH: ${recentHigh.toFixed(2)}`);
+    } else if (currentPrice < recentLow + (range * 0.1)) {
+      // Near or breaking recent low
+      if (direction === 'SELL') {
+        confidence += 20;
+        confluences.push('Breaking recent low');
+      } else if (!direction) {
+        direction = 'SELL';
+        confidence += 35;
+        reasons.push('Price at 10-candle low');
+      }
+      this.logger.log(`📉 Price near 10-candle LOW: ${recentLow.toFixed(2)}`);
+    }
+
+    // ===== SIGNAL 4: QUICK REVERSAL (Optional Bonus) =====
+    // Pin bar or engulfing for extra confidence
     const engulfing = this.detectEngulfing(lastCandle, prevCandle);
     if (engulfing) {
-      if (engulfing.direction === 'BUY') {
-        buySignals.push({ name: `${engulfing.type} engulfing pattern`, weight: 35 });
-      } else {
-        sellSignals.push({ name: `${engulfing.type} engulfing pattern`, weight: 35 });
-      }
-      this.logger.log(`✓ Engulfing detected: ${engulfing.type} ${engulfing.direction}`);
-    }
-
-    // === SCALPING SIGNAL 2: Pin Bar / Rejection (HIGH PRIORITY - reversal signal) ===
-    const pinBar = this.detectPinBar(lastCandle);
-    if (pinBar) {
-      if (pinBar.direction === 'BUY') {
-        buySignals.push({ name: `Pin bar rejection (${pinBar.type})`, weight: 30 });
-      } else {
-        sellSignals.push({ name: `Pin bar rejection (${pinBar.type})`, weight: 30 });
-      }
-      this.logger.log(`✓ Pin bar detected: ${pinBar.type} ${pinBar.direction}`);
-    }
-
-    // === SCALPING SIGNAL 3: Momentum (HIGH PRIORITY for aggressive scalping) ===
-    const momentum = this.detectMomentum(candles.slice(-5));
-    if (momentum) {
-      if (momentum.direction === 'BUY') {
-        buySignals.push({ name: `Strong BUY momentum`, weight: 25 });
-      } else {
-        sellSignals.push({ name: `Strong SELL momentum`, weight: 25 });
-      }
-      this.logger.log(`✓ Momentum detected: ${momentum.direction}`);
-    }
-
-    // === SCALPING SIGNAL 4: Double Top/Bottom (Quick reversal - HIGH PRIORITY) ===
-    const doublePattern = this.detectDoubleTopBottom(candles.slice(-20), currentPrice);
-    if (doublePattern) {
-      if (doublePattern.direction === 'BUY') {
-        buySignals.push({ name: `${doublePattern.type} pattern at ${doublePattern.level.toFixed(2)}`, weight: 30 });
-      } else {
-        sellSignals.push({ name: `${doublePattern.type} pattern at ${doublePattern.level.toFixed(2)}`, weight: 30 });
+      if (engulfing.direction === direction) {
+        confidence += 15;
+        confluences.push(`${engulfing.type} engulfing`);
+      } else if (!direction) {
+        direction = engulfing.direction;
+        confidence += 30;
+        reasons.push(`${engulfing.type} engulfing pattern`);
       }
     }
 
-    // === SCALPING SIGNAL 5: Quick Liquidity Grab (HIGHEST PRIORITY - institutional) ===
-    const liquidityGrab = this.detectQuickLiquidityGrab(candles.slice(-10));
-    if (liquidityGrab) {
-      if (liquidityGrab.direction === 'BUY') {
-        buySignals.push({ name: `Liquidity grab ${liquidityGrab.type}`, weight: 35 });
-      } else {
-        sellSignals.push({ name: `Liquidity grab ${liquidityGrab.type}`, weight: 35 });
-      }
-    }
-
-    // === SCALPING SIGNAL 6: EMA Cross (confirmation signal) ===
-    const emaCross = this.detectEMACross(candles.slice(-20));
-    if (emaCross) {
-      if (emaCross.direction === 'BUY') {
-        buySignals.push({ name: `EMA crossover`, weight: 10 });
-      } else {
-        sellSignals.push({ name: `EMA crossover`, weight: 10 });
-      }
-    }
-
-    // === TREND FILTER: Check if price is above/below EMA20 ===
-    // AGGRESSIVE: EMA20 on M5 = ~1.5 hours - fast trend detection
-    const trendDirection = this.getTrendDirection(candles);
-    if (trendDirection) {
-      this.logger.log(`📊 Trend direction: ${trendDirection.direction} (price ${trendDirection.position} EMA20, distance: ${trendDirection.distancePercent.toFixed(2)}%)`);
-    }
-
-    // === SCALPING SIGNAL 7: RSI Extremes (reversal signal) ===
-    const rsiSignal = this.checkRSI(candles.slice(-14));
-    if (rsiSignal) {
-      if (rsiSignal.direction === 'BUY') {
-        buySignals.push({ name: `RSI ${rsiSignal.condition} (${rsiSignal.value.toFixed(0)})`, weight: 20 });
-      } else {
-        sellSignals.push({ name: `RSI ${rsiSignal.condition} (${rsiSignal.value.toFixed(0)})`, weight: 20 });
-      }
-    }
-
-    // Calculate total weight for each direction
-    const buyWeight = buySignals.reduce((sum, s) => sum + s.weight, 0);
-    const sellWeight = sellSignals.reduce((sum, s) => sum + s.weight, 0);
-
-    this.logger.log(`Signal weights - BUY: ${buyWeight} (${buySignals.length} signals), SELL: ${sellWeight} (${sellSignals.length} signals)`);
-
-    // Determine direction based on which side has more weight
-    // Require a minimum difference to avoid conflicting signals
-    const minWeightDifference = 10;
-    let direction: 'BUY' | 'SELL' | null = null;
-    
-    if (buyWeight > sellWeight + minWeightDifference) {
-      direction = 'BUY';
-      reasons.push(...buySignals.map(s => s.name));
-      confidence = buyWeight;
-    } else if (sellWeight > buyWeight + minWeightDifference) {
-      direction = 'SELL';
-      reasons.push(...sellSignals.map(s => s.name));
-      confidence = sellWeight;
-    } else if (buyWeight > 0 || sellWeight > 0) {
-      // Conflicting signals - no clear direction
-      this.logger.log(`⏸️ Conflicting signals - BUY weight: ${buyWeight}, SELL weight: ${sellWeight}`);
-      return null;
-    }
-
-    // No signals at all
+    // No direction determined
     if (!direction) {
-      this.logger.log(`No scalping signal - no pattern detected. Checked: engulfing, pinBar, momentum, doublePattern, liquidityGrab, emaCross, rsi`);
+      this.logger.log(`⏸️ No clear direction - market is ranging`);
       return null;
     }
 
-    // === TREND FILTER (Critical) ===
-    // Block trades that go against the main trend (price above/below EMA20)
-    if (trendDirection && !this.config.allowCounterTrend) {
-      if (direction === 'BUY' && trendDirection.direction === 'BEARISH') {
-        this.logger.log(`🚫 BUY signal BLOCKED - Price is BELOW EMA20 (bearish trend). Not taking BUY in downtrend.`);
-        return null;
-      }
-      if (direction === 'SELL' && trendDirection.direction === 'BULLISH') {
-        this.logger.log(`🚫 SELL signal BLOCKED - Price is ABOVE EMA20 (bullish trend). Not taking SELL in uptrend.`);
-        return null;
-      }
-      // Add trend confirmation to confluences
-      confluences.push(`Trend aligned (${trendDirection.direction})`);
-    }
+    // Log final decision
+    this.logger.log(`🎯 Direction: ${direction}, Confidence: ${confidence}%, Reasons: ${reasons.join(', ')}`);
 
-    // Add EMA as confluence if it confirms direction
-    if (emaCross && emaCross.direction === direction) {
-      confluences.push(`EMA crossover confirmation`);
-    } else if (emaCross && emaCross.direction !== direction) {
-      confidence -= 10; // Penalty for going against EMA
-      this.logger.log(`⚠️ Trading against EMA trend - confidence reduced`);
-    }
-
-    // Check minimum confidence
+    // Check minimum confidence (very low threshold)
     if (confidence < this.config.minConfidence) {
-      this.logger.log(`No scalping signal - confidence too low: ${confidence}% (min: ${this.config.minConfidence}%)`);
+      this.logger.log(`❌ Confidence too low: ${confidence}% (min: ${this.config.minConfidence}%)`);
       return null;
     }
 
-    // Calculate tight scalping levels
-    // For XAU/USD (Gold) - broker requires minimum 1000 points distance for SL/TP
-    // With 3-digit pricing (e.g., 4916.606), we need larger distances
-    // 1 pip for Gold = 0.10 price, but broker limit requires ~1-2 dollar distance
-    // Setting pip value to 0.20 gives us: 50 pips * 0.20 = $10 SL, 80 pips * 0.20 = $16 TP
-    const pipValue = 0.20; // Increased for Gold to meet broker minimum SL/TP distance
+    // Calculate SL/TP
+    const pipValue = 0.20; // For Gold
     
     let stopLoss: number;
     let takeProfit: number;
@@ -245,19 +210,14 @@ export class ScalpingStrategyService {
       takeProfit = currentPrice - (this.config.takeProfitPips * pipValue);
     }
     
-    this.logger.log(`Scalping SL/TP: Entry=${currentPrice.toFixed(2)}, SL=${stopLoss.toFixed(2)}, TP=${takeProfit.toFixed(2)} (${this.config.stopLossPips}/${this.config.takeProfitPips} pips)`);
+    this.logger.log(`📊 Entry: ${currentPrice.toFixed(2)}, SL: ${stopLoss.toFixed(2)}, TP: ${takeProfit.toFixed(2)}`);
 
     const risk = Math.abs(currentPrice - stopLoss);
     const reward = Math.abs(takeProfit - currentPrice);
     const riskRewardRatio = reward / risk;
 
-    if (riskRewardRatio < this.config.minRiskReward) {
-      return null;
-    }
-
-    // Add scalping-specific metadata
-    confluences.push(`Tight SL: ${this.config.stopLossPips} pips`);
-    confluences.push(`Quick TP: ${this.config.takeProfitPips} pips`);
+    // Add metadata
+    confluences.push(`R:R ${riskRewardRatio.toFixed(2)}`);
 
     return {
       direction,
@@ -272,12 +232,20 @@ export class ScalpingStrategyService {
   }
 
   /**
-   * Detect bullish/bearish engulfing pattern
+   * Original analyzeForScalp - kept for reference but renamed
    */
-  private detectEngulfing(
-    current: Candle,
-    previous: Candle,
-  ): { direction: 'BUY' | 'SELL'; type: string } | null {
+  analyzeForScalpOriginal(
+    candles: Candle[],
+    currentPrice: number,
+    spread: number = 0,
+  ): TradeSetup | null {
+    if (candles.length < 30) {
+      this.logger.warn(`Not enough candles for scalping: ${candles.length} (need 30+)`);
+      return null;
+    }
+
+    // Log candle data for debugging
+    const lastCandle = candles[candles.length - 1];
     const currentBody = Math.abs(current.close - current.open);
     const previousBody = Math.abs(previous.close - previous.open);
 

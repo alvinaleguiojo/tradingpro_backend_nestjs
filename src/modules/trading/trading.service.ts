@@ -118,8 +118,8 @@ export class TradingService implements OnModuleInit {
       // Get price history from MT5 - reduced count for scalping (today's data only has ~50-60 candles)
       const candles = await this.mt5Service.getPriceHistory(symbol, analysisTimeframe, 100);
       
-      // Reduced minimum for scalping - we only need 30 candles for pattern detection
-      const minCandles = this.scalpingMode ? 30 : 50;
+      // Reduced minimum for aggressive scalping - only need 20 candles
+      const minCandles = this.scalpingMode ? 20 : 50;
       if (candles.length < minCandles) {
         await this.logEvent(
           TradingEventType.MARKET_ANALYSIS,
