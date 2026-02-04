@@ -422,7 +422,7 @@ export class TradingService implements OnModuleInit {
    */
   async executeTrade(signal: TradingSignalDocument): Promise<TradeDocument | null> {
     // Use the currently connected MT5 account, fallback to env variable
-    const accountId = this.mt5Service.getCurrentAccountId() || this.configService.get('MT5_USER', 'default');
+    const accountId: string = this.mt5Service.getCurrentAccountId() || this.configService.get('MT5_USER', 'default');
     
     try {
       // Check if auto trading is enabled
