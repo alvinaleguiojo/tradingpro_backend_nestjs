@@ -575,17 +575,33 @@ export class Mt5Service implements OnModuleInit {
   /**
    * Load token from database (for serverless cold starts)
    * Avoids full reconnection if token is still valid
+   * IMPORTANT: Only loads token for the CURRENTLY SET credentials (dynamicCredentials.user)
    */
   private async loadTokenFromDb(): Promise<void> {
     try {
-      const connection = await this.mt5ConnectionModel.findOne({ isConnected: true }).sort({ lastConnectedAt: -1 }).exec();
+      // CRITICAL FIX: Only load token for the account we're currently trying to use
+      // This prevents loading a different account's token when switching between accounts
+      const targetUser = this.dynamicCredentials?.user;
+      
+      let connection;
+      if (targetUser) {
+        // Load token for the specific account we're trying to connect to
+        connection = await this.mt5ConnectionModel.findOne({ user: targetUser, isConnected: true }).exec();
+        if (!connection) {
+          this.logger.log(`No cached token found for account ${targetUser}, will need to connect`);
+          return;
+        }
+      } else {
+        // Fallback to most recent (only for initial startup with no credentials set)
+        connection = await this.mt5ConnectionModel.findOne({ isConnected: true }).sort({ lastConnectedAt: -1 }).exec();
+      }
       
       if (connection?.token) {
         const token = connection.token as string;
         // Validate token format - must be UUID, not an error object
         if (!this.isValidToken(token)) {
           const tokenPreview = token.substring(0, 20);
-          this.logger.warn(`Invalid token format in database (starts with: ${tokenPreview}...), clearing it`);
+          this.logger.warn(`Invalid token format in database for ${connection.user} (starts with: ${tokenPreview}...), clearing it`);
           // Clear the invalid token from database
           await this.mt5ConnectionModel.updateOne(
             { _id: connection._id },
@@ -598,13 +614,18 @@ export class Mt5Service implements OnModuleInit {
         const tokenAge = Date.now() - connection.lastConnectedAt.getTime();
         if (tokenAge < 30 * 60 * 1000) { // 30 minutes
           this.token = connection.token;
-          this.dynamicCredentials = {
-            user: connection.user,
-            password: (connection as any).password || '',
-            host: connection.host,
-            port: connection.port?.toString() || '443',
-          };
-          this.logger.log(`Restored MT5 token from database (age: ${Math.round(tokenAge/1000)}s)`);
+          // Only update dynamicCredentials if not already set (avoid overwriting intended account)
+          if (!this.dynamicCredentials?.user) {
+            this.dynamicCredentials = {
+              user: connection.user,
+              password: (connection as any).password || '',
+              host: connection.host,
+              port: connection.port?.toString() || '443',
+            };
+          }
+          this.logger.log(`Restored MT5 token for account ${connection.user} from database (age: ${Math.round(tokenAge/1000)}s)`);
+        } else {
+          this.logger.log(`Token for account ${connection.user} is too old (${Math.round(tokenAge/1000)}s), will reconnect`);
         }
       }
     } catch (error) {
