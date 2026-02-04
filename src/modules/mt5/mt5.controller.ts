@@ -314,7 +314,15 @@ export class Mt5Controller {
   @Get('trade-history')
   @ApiOperation({ summary: 'Get closed trade history' })
   @ApiQuery({ name: 'days', required: false, example: 30 })
-  async getTradeHistory(@Query('days') days: number = 30) {
+  @ApiQuery({ name: 'userId', required: false, description: 'User ID to ensure correct account connection' })
+  async getTradeHistory(
+    @Query('days') days: number = 30,
+    @Query('userId') userId?: string,
+  ) {
+    // Ensure we're connected to the right account
+    if (userId) {
+      await this.mt5Service.ensureAccountConnection(userId);
+    }
     const history = await this.mt5Service.getTradeHistory(days);
     return { success: true, data: history, count: history.length };
   }
@@ -322,7 +330,15 @@ export class Mt5Controller {
   @Get('deals')
   @ApiOperation({ summary: 'Get deals history (includes deposits/withdrawals)' })
   @ApiQuery({ name: 'days', required: false, example: 30 })
-  async getDealsHistory(@Query('days') days: number = 30) {
+  @ApiQuery({ name: 'userId', required: false, description: 'User ID to ensure correct account connection' })
+  async getDealsHistory(
+    @Query('days') days: number = 30,
+    @Query('userId') userId?: string,
+  ) {
+    // Ensure we're connected to the right account
+    if (userId) {
+      await this.mt5Service.ensureAccountConnection(userId);
+    }
     const deals = await this.mt5Service.getDealsHistory(days);
     return { success: true, data: deals, count: deals.length };
   }
