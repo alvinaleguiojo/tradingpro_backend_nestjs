@@ -149,11 +149,11 @@ export class ScalpingStrategyService {
       }
     }
 
-    // === TREND FILTER: Check if price is above/below EMA20 ===
-    // This filters out trades against the main trend direction
-    const trendDirection = this.getTrendDirection(candles.slice(-25));
+    // === TREND FILTER: Check if price is above/below EMA50 ===
+    // Use full candle data for better trend detection (EMA50 on M5 = ~4 hours of data)
+    const trendDirection = this.getTrendDirection(candles);
     if (trendDirection) {
-      this.logger.log(`📊 Trend direction: ${trendDirection.direction} (price ${trendDirection.position} EMA20)`);
+      this.logger.log(`📊 Trend direction: ${trendDirection.direction} (price ${trendDirection.position} EMA50, distance: ${trendDirection.distancePercent.toFixed(2)}%)`);
     }
 
     // === SCALPING SIGNAL 7: RSI Extremes (reversal signal) ===
@@ -441,33 +441,40 @@ export class ScalpingStrategyService {
   }
 
   /**
-   * Get overall trend direction based on price position relative to EMA20
+   * Get overall trend direction based on price position relative to EMA50
+   * EMA50 on M5 timeframe = ~4 hours of price data for better trend reading
    * This is used as a trend filter to avoid trading against the main trend
    */
-  private getTrendDirection(candles: Candle[]): { direction: 'BULLISH' | 'BEARISH'; position: string } | null {
-    if (candles.length < 20) return null;
+  private getTrendDirection(candles: Candle[]): { direction: 'BULLISH' | 'BEARISH'; position: string; distancePercent: number } | null {
+    if (candles.length < 50) {
+      this.logger.warn(`Not enough candles for trend filter: ${candles.length} (need 50+)`);
+      return null;
+    }
 
     const closes = candles.map(c => c.close);
-    const ema20 = this.calculateEMA(closes, 20);
+    const ema50 = this.calculateEMA(closes, 50);
     
-    if (ema20.length === 0) return null;
+    if (ema50.length === 0) return null;
 
     const currentPrice = closes[closes.length - 1];
-    const currentEMA = ema20[ema20.length - 1];
+    const currentEMA = ema50[ema50.length - 1];
     
     // Calculate how far price is from EMA (as percentage)
     const distancePercent = ((currentPrice - currentEMA) / currentEMA) * 100;
     
-    // Require price to be at least 0.05% away from EMA to confirm trend
+    this.logger.log(`📈 EMA50 trend check: Price=${currentPrice.toFixed(2)}, EMA50=${currentEMA.toFixed(2)}, Distance=${distancePercent.toFixed(3)}%`);
+    
+    // Require price to be at least 0.1% away from EMA to confirm trend
     // This prevents choppy signals when price is hovering around EMA
-    if (Math.abs(distancePercent) < 0.05) {
+    if (Math.abs(distancePercent) < 0.1) {
+      this.logger.log(`⏸️ Price too close to EMA50 (${distancePercent.toFixed(3)}%) - no clear trend`);
       return null; // Price is too close to EMA, no clear trend
     }
 
     if (currentPrice > currentEMA) {
-      return { direction: 'BULLISH', position: 'ABOVE' };
+      return { direction: 'BULLISH', position: 'ABOVE', distancePercent };
     } else {
-      return { direction: 'BEARISH', position: 'BELOW' };
+      return { direction: 'BEARISH', position: 'BELOW', distancePercent };
     }
   }
 
