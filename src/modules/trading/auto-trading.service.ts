@@ -66,6 +66,71 @@ export class AutoTradingService implements OnModuleInit {
   }
 
   /**
+   * TOKEN REFRESH CRON: Refresh tokens for ALL accounts every 20 minutes
+   * This ensures tokens are always fresh before trading cycles
+   * MTAPI tokens expire after ~30 minutes, so we refresh at 20 mins to be safe
+   */
+  @Cron('0 */20 * * * *') // Every 20 minutes
+  async handleTokenRefreshCron() {
+    this.logger.log('🔄 Starting token refresh for all accounts...');
+    const accounts = await this.getAllActiveAccounts();
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const account of accounts) {
+      try {
+        // Force reconnect by clearing cached token first
+        await this.mt5ConnectionModel.updateOne(
+          { _id: (account as any)._id },
+          { token: null }
+        );
+        
+        // Reconnect and get fresh token
+        await this.forceReconnectAccount(account);
+        successCount++;
+        this.logger.log(`✅ Token refreshed for account ${account.user}`);
+      } catch (error) {
+        failCount++;
+        this.logger.error(`❌ Failed to refresh token for ${account.user}: ${error.message}`);
+      }
+      
+      // Small delay between accounts to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+
+    this.logger.log(`🔄 Token refresh completed: ${successCount} success, ${failCount} failed`);
+  }
+
+  /**
+   * Force reconnect an account and update token in database
+   */
+  private async forceReconnectAccount(connection: Mt5ConnectionDocument): Promise<string> {
+    if (!connection.user || !(connection as any).password || !connection.host) {
+      throw new Error(`Incomplete MT5 credentials for account ${connection.user}`);
+    }
+
+    // Set credentials without cached token to force reconnection
+    await this.mt5Service.setCredentialsWithToken(
+      connection.user,
+      (connection as any).password,
+      connection.host,
+      connection.port?.toString() || '443',
+      undefined, // No cached token - force reconnect
+    );
+
+    // Connect and get new token
+    const newToken = await this.mt5Service.connect();
+
+    // Update token in database
+    await this.mt5ConnectionModel.updateOne(
+      { _id: (connection as any)._id },
+      { token: newToken, isConnected: true, lastConnectedAt: new Date() }
+    );
+
+    return newToken;
+  }
+
+  /**
    * Sync trades with MT5 every 2 minutes for ALL accounts
    */
   @Cron('0 */2 * * * *')
@@ -92,7 +157,7 @@ export class AutoTradingService implements OnModuleInit {
    * Loads credentials from database, connects, and updates token
    */
   private async ensureMt5ConnectionForAccount(connection: Mt5ConnectionDocument): Promise<void> {
-    try {
+    try:
       if (!connection.user || !(connection as any).password || !connection.host) {
         throw new Error(`Incomplete MT5 credentials for account ${connection.user}`);
       }
@@ -556,6 +621,50 @@ export class AutoTradingService implements OnModuleInit {
    */
   isAutoTradingEnabled(): boolean {
     return this.isEnabled;
+  }
+
+  /**
+   * Manually refresh all tokens - can be called from API
+   */
+  async refreshAllTokens(): Promise<{
+    success: boolean;
+    message: string;
+    results: { accountId: string; success: boolean; error?: string }[];
+  }> {
+    this.logger.log('🔄 Manual token refresh triggered for all accounts...');
+    const accounts = await this.getAllActiveAccounts();
+    const results: { accountId: string; success: boolean; error?: string }[] = [];
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const account of accounts) {
+      try {
+        // Force reconnect by clearing cached token first
+        await this.mt5ConnectionModel.updateOne(
+          { _id: (account as any)._id },
+          { token: null }
+        );
+        
+        // Reconnect and get fresh token
+        await this.forceReconnectAccount(account);
+        successCount++;
+        results.push({ accountId: account.user, success: true });
+        this.logger.log(`✅ Token refreshed for account ${account.user}`);
+      } catch (error) {
+        failCount++;
+        results.push({ accountId: account.user, success: false, error: error.message });
+        this.logger.error(`❌ Failed to refresh token for ${account.user}: ${error.message}`);
+      }
+      
+      // Small delay between accounts to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    }
+
+    return {
+      success: failCount === 0,
+      message: `Token refresh completed: ${successCount} success, ${failCount} failed`,
+      results,
+    };
   }
 
   /**

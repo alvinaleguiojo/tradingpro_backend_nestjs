@@ -227,6 +227,20 @@ export class TradingController {
     return this.autoTradingService.toggle();
   }
 
+  @Post('refresh-tokens')
+  @ApiOperation({ summary: 'Refresh MT5 tokens for all accounts' })
+  async refreshAllTokens() {
+    const result = await this.autoTradingService.refreshAllTokens();
+    return result;
+  }
+
+  @Get('refresh-tokens')
+  @ApiOperation({ summary: 'Refresh MT5 tokens for all accounts (GET for cron)' })
+  async refreshAllTokensGet() {
+    const result = await this.autoTradingService.refreshAllTokens();
+    return result;
+  }
+
   @Get('timezone')
   @ApiOperation({ summary: 'Get broker timezone info and current kill zone' })
   getTimezoneInfo() {
