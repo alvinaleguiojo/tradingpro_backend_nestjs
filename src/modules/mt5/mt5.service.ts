@@ -1154,7 +1154,7 @@ export class Mt5Service implements OnModuleInit {
    * Get trade history (closed orders/deals) from MT5
    * @param days Number of days of history to fetch (default 30)
    */
-  async getTradeHistory(days: number = 30): Promise<any[]> {
+  async getTradeHistory(days: number = 30): Promise<any> {
     await this.checkConnection();
 
     try {
@@ -1162,20 +1162,44 @@ export class Mt5Service implements OnModuleInit {
       const dateTo = new Date();
       const dateFrom = new Date();
       dateFrom.setDate(dateFrom.getDate() - days);
+      
+      // Format dates - try different formats for the API
+      const fromDateStr = dateFrom.toISOString().split('T')[0];
+      const toDateStr = dateTo.toISOString().split('T')[0];
 
+      // Try HistoryPositionsByCloseTime first (more reliable for closed positions)
+      try {
+        const positionsResponse = await this.axiosClient.get('/HistoryPositionsByCloseTime', {
+          params: {
+            id: this.token,
+            from: fromDateStr,
+            to: toDateStr,
+          },
+        });
+        this.logger.log(`Fetched ${positionsResponse.data?.length || 0} positions from HistoryPositionsByCloseTime`);
+        if (positionsResponse.data && positionsResponse.data.length > 0) {
+          return { positions: positionsResponse.data, source: 'HistoryPositionsByCloseTime' };
+        }
+      } catch (e) {
+        this.logger.warn('HistoryPositionsByCloseTime failed:', e.message);
+      }
+
+      // Fallback to OrderHistory
       const response = await this.axiosClient.get('/OrderHistory', {
         params: {
           id: this.token,
-          from: dateFrom.toISOString().split('T')[0],
-          to: dateTo.toISOString().split('T')[0],
+          from: fromDateStr,
+          to: toDateStr,
         },
       });
       
-      this.logger.log(`Fetched ${response.data?.length || 0} historical orders`);
-      return response.data || [];
+      // The API returns { orders: [], internalDeals: [], internalOrders: [], action, partialResponse }
+      const data = response.data;
+      this.logger.log(`Fetched trade history from OrderHistory - orders: ${data?.orders?.length || 0}, internalDeals: ${data?.internalDeals?.length || 0}`);
+      return { ...data, source: 'OrderHistory' };
     } catch (error) {
       this.logger.error('Failed to get trade history', error);
-      return [];
+      return { orders: [], internalDeals: [], internalOrders: [], source: 'error' };
     }
   }
 
