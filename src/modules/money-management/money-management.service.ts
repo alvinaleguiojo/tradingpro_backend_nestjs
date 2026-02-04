@@ -316,6 +316,34 @@ export class MoneyManagementService implements OnModuleInit {
     
     const accountSummary = await this.mt5Service.getAccountSummary();
     
+    // DOUBLE-CHECK: Verify account ID again after getting summary (prevents race conditions)
+    const doubleCheckAccountId = await this.mt5Service.getVerifiedAccountId();
+    if (!doubleCheckAccountId || doubleCheckAccountId !== accountId) {
+      this.logger.warn(`🚨 RACE CONDITION DETECTED! Account changed mid-sync. Expected: ${accountId}, Got: ${doubleCheckAccountId || 'unknown'}`);
+      const existingState = await this.accountStateModel.findOne({ accountId }).exec();
+      if (existingState) {
+        return existingState;
+      }
+      // Return safe defaults
+      return new this.accountStateModel({
+        accountId,
+        initialBalance: 100,
+        currentBalance: 100,
+        currentLevel: 1,
+        currentLotSize: 0.01,
+        dailyProfit: 0,
+        weeklyProfit: 0,
+        monthlyProfit: 0,
+        totalProfit: 0,
+        lastTradingDay: new Date(),
+        weekStartDate: this.getWeekStartDate(),
+        monthStartDate: this.getMonthStartDate(),
+      });
+    }
+    
+    // Log the balance we got to help debug any future issues
+    this.logger.log(`💰 Account ${accountId}: Balance from MT5 = $${accountSummary?.balance?.toFixed(2) || 'unknown'}`);
+    
     if (!accountSummary || accountSummary.balance === undefined || accountSummary.balance === null) {
       // If we can't get MT5 data, return existing state or create with defaults
       this.logger.warn(`Could not get MT5 account summary for ${accountId}, using existing state`);

@@ -469,8 +469,25 @@ export class TradingService implements OnModuleInit {
       this.logger.log(`Daily target check DISABLED for testing - would have stopped: ${mmStatus.shouldStopTrading.stop ? 'YES' : 'NO'}`);
 
       // Get dynamic lot size based on current balance level
-      const lotSize = mmStatus.recommendedLotSize;
-      const currentLevel = mmStatus.currentLevel;
+      let lotSize = mmStatus.recommendedLotSize;
+      let currentLevel = mmStatus.currentLevel;
+      const currentBalance = Number(mmStatus.accountState.currentBalance);
+      
+      // SANITY CHECK: Verify lot size matches balance
+      // For balances under $100, lot size should ALWAYS be 0.01
+      if (currentBalance < 100 && lotSize > 0.01) {
+        this.logger.error(`🚨 LOT SIZE MISMATCH! Balance $${currentBalance.toFixed(2)} should use 0.01 lot but got ${lotSize} - CORRECTING to 0.01`);
+        await this.logEvent(
+          TradingEventType.ERROR,
+          `Lot size sanity check failed: Balance $${currentBalance.toFixed(2)} but lot size ${lotSize} - corrected to 0.01`,
+          { accountId, balance: currentBalance, originalLotSize: lotSize, correctedLotSize: 0.01 },
+          'error',
+          accountId,
+        );
+        // Force safe lot size
+        lotSize = 0.01;
+        currentLevel = { ...currentLevel, level: 1, lotSize: 0.01 };
+      }
       
       this.logger.log(
         `Money Management: Level ${currentLevel.level}, Balance $${mmStatus.accountState.currentBalance}, ` +
