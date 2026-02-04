@@ -417,8 +417,13 @@ export class IctStrategyService {
   /**
    * Check if it's a high-impact news time (avoid trading)
    * XAU/USD major news: FOMC, NFP, CPI
+   * DISABLED FOR TESTING
    */
   isHighImpactNewsTime(): boolean {
+    // DISABLED - always allow trading
+    return false;
+    
+    /* Original logic - uncomment to re-enable
     const now = new Date();
     const dayOfWeek = now.getUTCDay();
     const hour = now.getUTCHours();
@@ -437,6 +442,7 @@ export class IctStrategyService {
     }
 
     return false;
+    */
   }
 
   /**
