@@ -330,31 +330,46 @@ export class ScalpingStrategyService {
   }
 
   /**
-   * Detect strong momentum (3+ candles in same direction)
+   * Detect strong momentum based on actual price movement, not just candle colors
+   * Looks at higher highs/higher lows for BUY, lower highs/lower lows for SELL
    */
   private detectMomentum(
     candles: Candle[],
   ): { direction: 'BUY' | 'SELL'; strength: number } | null {
-    if (candles.length < 3) return null;
+    if (candles.length < 5) return null;
 
-    let bullishCount = 0;
-    let bearishCount = 0;
-    let totalMomentum = 0;
+    // Calculate net price change over the period
+    const firstPrice = candles[0].close;
+    const lastPrice = candles[candles.length - 1].close;
+    const netChange = lastPrice - firstPrice;
+    const netChangePercent = (netChange / firstPrice) * 100;
+
+    // Count higher highs/lows vs lower highs/lows
+    let higherHighs = 0;
+    let lowerLows = 0;
+    let lowerHighs = 0;
+    let higherLows = 0;
 
     for (let i = 1; i < candles.length; i++) {
-      const change = candles[i].close - candles[i - 1].close;
-      totalMomentum += change;
+      if (candles[i].high > candles[i - 1].high) higherHighs++;
+      else lowerHighs++;
       
-      if (candles[i].close > candles[i].open) bullishCount++;
-      else if (candles[i].close < candles[i].open) bearishCount++;
+      if (candles[i].low > candles[i - 1].low) higherLows++;
+      else lowerLows++;
     }
 
-    // Strong momentum: 3+ candles in same direction
-    if (bullishCount >= 3 && bearishCount <= 1) {
-      return { direction: 'BUY', strength: totalMomentum };
+    this.logger.log(`Momentum check: Net change ${netChange.toFixed(2)} (${netChangePercent.toFixed(3)}%), HH=${higherHighs}, LL=${lowerLows}, LH=${lowerHighs}, HL=${higherLows}`);
+
+    // Strong BULLISH momentum: net positive change AND mostly higher highs/higher lows
+    if (netChangePercent > 0.05 && higherHighs >= 3 && higherLows >= 2) {
+      this.logger.log(`✅ BULLISH momentum confirmed: +${netChangePercent.toFixed(3)}%`);
+      return { direction: 'BUY', strength: netChange };
     }
-    if (bearishCount >= 3 && bullishCount <= 1) {
-      return { direction: 'SELL', strength: Math.abs(totalMomentum) };
+    
+    // Strong BEARISH momentum: net negative change AND mostly lower highs/lower lows
+    if (netChangePercent < -0.05 && lowerHighs >= 3 && lowerLows >= 2) {
+      this.logger.log(`✅ BEARISH momentum confirmed: ${netChangePercent.toFixed(3)}%`);
+      return { direction: 'SELL', strength: Math.abs(netChange) };
     }
 
     return null;
