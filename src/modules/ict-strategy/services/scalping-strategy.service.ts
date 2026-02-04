@@ -7,7 +7,17 @@ export interface ScalpingConfig {
   minRiskReward: number;          // Minimum R:R ratio
   maxSpreadPips: number;          // Max spread to trade
   
-  // Risk settings
+  // ATR-based Risk settings
+  useAtrForSLTP: boolean;         // Use ATR-based SL/TP instead of fixed
+  atrPeriod: number;              // Period for ATR calculation (default 14)
+  atrSlMultiplier: number;        // SL = ATR * this multiplier
+  atrTpMultiplier: number;        // TP = ATR * this multiplier
+  minSlPips: number;              // Minimum SL in pips (floor)
+  maxSlPips: number;              // Maximum SL in pips (cap)
+  minTpPips: number;              // Minimum TP in pips (floor)
+  maxTpPips: number;              // Maximum TP in pips (cap)
+  
+  // Fallback fixed pips (used when ATR not available)
   stopLossPips: number;           // Fixed SL in pips
   takeProfitPips: number;         // Fixed TP in pips
   trailingStopPips: number;       // Trailing stop distance
@@ -23,14 +33,25 @@ export interface ScalpingConfig {
 }
 
 // ULTRA AGGRESSIVE scalping defaults for XAU/USD
-// Optimized for quick in-and-out trades with tight risk management
+// Optimized for quick in-and-out trades with ATR-based risk management
 const AGGRESSIVE_SCALPING_CONFIG: ScalpingConfig = {
   minConfidence: 10,              // VERY LOW - take almost any setup
   minRiskReward: 1.0,             // 1:1 minimum for maximum entries
   maxSpreadPips: 50,              // Allow higher spread during volatile times
   
-  stopLossPips: 25,               // TIGHT 25 pip stop - quick cut losses
-  takeProfitPips: 40,             // Quick 40 pip TP - 1.6 R:R
+  // ATR-based SL/TP settings
+  useAtrForSLTP: true,            // USE ATR for dynamic SL/TP
+  atrPeriod: 14,                  // Standard 14-period ATR
+  atrSlMultiplier: 1.2,           // SL = 1.2x ATR (protects against noise)
+  atrTpMultiplier: 1.8,           // TP = 1.8x ATR (1.5 R:R ratio)
+  minSlPips: 15,                  // Minimum 15 pips SL (floor)
+  maxSlPips: 50,                  // Maximum 50 pips SL (cap)
+  minTpPips: 20,                  // Minimum 20 pips TP
+  maxTpPips: 80,                  // Maximum 80 pips TP
+  
+  // Fallback fixed pips (when ATR not available)
+  stopLossPips: 25,               // Fallback 25 pip stop
+  takeProfitPips: 40,             // Fallback 40 pip TP
   trailingStopPips: 15,           // Very tight trailing
   
   usePartialTakeProfit: true,
@@ -196,21 +217,41 @@ export class ScalpingStrategyService {
       return null;
     }
 
-    // Calculate SL/TP
-    const pipValue = 0.20; // For Gold
+    // Calculate ATR-based or fixed SL/TP
+    const pipValue = 0.20; // For Gold (1 pip = $0.20)
+    
+    let slPips: number;
+    let tpPips: number;
+    
+    if (this.config.useAtrForSLTP && candles.length >= this.config.atrPeriod) {
+      // Calculate ATR
+      const atr = this.calculateATR(candles, this.config.atrPeriod);
+      const atrInPips = atr / pipValue;
+      
+      // ATR-based SL/TP with min/max caps
+      slPips = Math.min(this.config.maxSlPips, Math.max(this.config.minSlPips, atrInPips * this.config.atrSlMultiplier));
+      tpPips = Math.min(this.config.maxTpPips, Math.max(this.config.minTpPips, atrInPips * this.config.atrTpMultiplier));
+      
+      this.logger.log(`📊 ATR(${this.config.atrPeriod}): ${atr.toFixed(2)} ($${atrInPips.toFixed(1)} pips) → SL: ${slPips.toFixed(1)} pips, TP: ${tpPips.toFixed(1)} pips`);
+    } else {
+      // Fallback to fixed pips
+      slPips = this.config.stopLossPips;
+      tpPips = this.config.takeProfitPips;
+      this.logger.log(`📊 Using fixed SL/TP: SL: ${slPips} pips, TP: ${tpPips} pips`);
+    }
     
     let stopLoss: number;
     let takeProfit: number;
 
     if (direction === 'BUY') {
-      stopLoss = currentPrice - (this.config.stopLossPips * pipValue);
-      takeProfit = currentPrice + (this.config.takeProfitPips * pipValue);
+      stopLoss = currentPrice - (slPips * pipValue);
+      takeProfit = currentPrice + (tpPips * pipValue);
     } else {
-      stopLoss = currentPrice + (this.config.stopLossPips * pipValue);
-      takeProfit = currentPrice - (this.config.takeProfitPips * pipValue);
+      stopLoss = currentPrice + (slPips * pipValue);
+      takeProfit = currentPrice - (tpPips * pipValue);
     }
     
-    this.logger.log(`📊 Entry: ${currentPrice.toFixed(2)}, SL: ${stopLoss.toFixed(2)}, TP: ${takeProfit.toFixed(2)}`);
+    this.logger.log(`📊 Entry: ${currentPrice.toFixed(2)}, SL: ${stopLoss.toFixed(2)} (${slPips.toFixed(0)}p), TP: ${takeProfit.toFixed(2)} (${tpPips.toFixed(0)}p)`);
 
     const risk = Math.abs(currentPrice - stopLoss);
     const reward = Math.abs(takeProfit - currentPrice);
@@ -264,6 +305,43 @@ export class ScalpingStrategyService {
     }
 
     return null;
+  }
+
+  /**
+   * Calculate Average True Range (ATR) for dynamic SL/TP
+   * ATR measures market volatility by averaging the true range over N periods
+   */
+  private calculateATR(candles: Candle[], period: number = 14): number {
+    if (candles.length < period + 1) {
+      // Not enough candles, return a default based on recent range
+      const recent = candles.slice(-5);
+      const avgRange = recent.reduce((sum, c) => sum + (c.high - c.low), 0) / recent.length;
+      return avgRange;
+    }
+
+    // Calculate True Range for each candle
+    const trueRanges: number[] = [];
+    for (let i = 1; i < candles.length; i++) {
+      const current = candles[i];
+      const previous = candles[i - 1];
+      
+      // True Range = max of:
+      // 1. Current High - Current Low
+      // 2. |Current High - Previous Close|
+      // 3. |Current Low - Previous Close|
+      const tr = Math.max(
+        current.high - current.low,
+        Math.abs(current.high - previous.close),
+        Math.abs(current.low - previous.close)
+      );
+      trueRanges.push(tr);
+    }
+
+    // Take the last 'period' true ranges and average them
+    const recentTRs = trueRanges.slice(-period);
+    const atr = recentTRs.reduce((sum, tr) => sum + tr, 0) / recentTRs.length;
+    
+    return atr;
   }
 
   /**
