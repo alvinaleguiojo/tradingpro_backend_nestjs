@@ -8,6 +8,7 @@ import { AnalysisModule } from './modules/analysis/analysis.module';
 import { IctStrategyModule } from './modules/ict-strategy/ict-strategy.module';
 import { OpenAiModule } from './modules/openai/openai.module';
 import { MoneyManagementModule } from './modules/money-management/money-management.module';
+import { ChatModule } from './modules/chat/chat.module';
 import { HealthController } from './health.controller';
 
 @Module({
@@ -50,6 +51,7 @@ import { HealthController } from './health.controller';
     IctStrategyModule,
     OpenAiModule,
     MoneyManagementModule,
+    ChatModule,
   ],
   controllers: [HealthController],
 })
