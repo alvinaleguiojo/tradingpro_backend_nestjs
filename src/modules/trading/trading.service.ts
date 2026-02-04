@@ -83,6 +83,7 @@ export class TradingService implements OnModuleInit {
     level: string = 'info',
     tradeId?: string,
     signalId?: string,
+    accountId?: string,
   ) {
     const log = new this.logModel({
       eventType,
@@ -91,6 +92,7 @@ export class TradingService implements OnModuleInit {
       level,
       tradeId,
       signalId,
+      accountId: accountId || this.mt5Service.getCurrentAccountId(),
     });
     
     await log.save();
@@ -345,6 +347,7 @@ export class TradingService implements OnModuleInit {
     else strength = SignalStrength.WEAK;
 
     const signal = new this.signalModel({
+      accountId: this.mt5Service.getCurrentAccountId(),
       symbol: ictAnalysis.symbol,
       timeframe: ictAnalysis.timeframe,
       signalType,
@@ -388,6 +391,7 @@ export class TradingService implements OnModuleInit {
     else strength = SignalStrength.WEAK;
 
     const signal = new this.signalModel({
+      accountId: this.mt5Service.getCurrentAccountId(),
       symbol,
       timeframe,
       signalType,
@@ -576,8 +580,9 @@ export class TradingService implements OnModuleInit {
         }
       }
 
-      // Create trade record
+      // Create trade record - reuse accountId from top of function
       const trade = new this.tradeModel({
+        accountId,
         mt5Ticket: orderResult.order,
         symbol: signal.symbol,
         direction: direction === 'BUY' ? TradeDirection.BUY : TradeDirection.SELL,
@@ -633,30 +638,43 @@ export class TradingService implements OnModuleInit {
   }
 
   /**
-   * Get open trades
+   * Get open trades - optionally filtered by accountId
    */
-  async getOpenTrades(): Promise<TradeDocument[]> {
-    return this.tradeModel.find({ status: TradeStatus.OPEN }).sort({ openedAt: -1 }).exec();
+  async getOpenTrades(accountId?: string): Promise<TradeDocument[]> {
+    const query: any = { status: TradeStatus.OPEN };
+    if (accountId) {
+      query.accountId = accountId;
+    }
+    return this.tradeModel.find(query).sort({ openedAt: -1 }).exec();
   }
 
   /**
-   * Get recent signals
+   * Get recent signals - optionally filtered by accountId
    */
-  async getRecentSignals(limit: number = 20): Promise<TradingSignalDocument[]> {
-    return this.signalModel.find().sort({ createdAt: -1 }).limit(limit).exec();
+  async getRecentSignals(limit: number = 20, accountId?: string): Promise<TradingSignalDocument[]> {
+    const query: any = {};
+    if (accountId) {
+      query.accountId = accountId;
+    }
+    return this.signalModel.find(query).sort({ createdAt: -1 }).limit(limit).exec();
   }
 
   /**
-   * Get trading logs
+   * Get trading logs - optionally filtered by accountId
    */
-  async getTradingLogs(limit: number = 50): Promise<TradingLogDocument[]> {
-    return this.logModel.find().sort({ createdAt: -1 }).limit(limit).exec();
+  async getTradingLogs(limit: number = 50, accountId?: string): Promise<TradingLogDocument[]> {
+    const query: any = {};
+    if (accountId) {
+      query.accountId = accountId;
+    }
+    return this.logModel.find(query).sort({ createdAt: -1 }).limit(limit).exec();
   }
 
   /**
    * Get trade statistics - combines database trades with live MT5 data
+   * Optionally filtered by accountId
    */
-  async getTradeStats(): Promise<{
+  async getTradeStats(accountId?: string): Promise<{
     totalTrades: number;
     openTrades: number;
     closedTrades: number;
@@ -665,8 +683,12 @@ export class TradingService implements OnModuleInit {
     winRate: number;
     totalProfit: number;
   }> {
-    // Get trades from database
-    const dbTrades = await this.tradeModel.find().exec();
+    // Get trades from database - filter by accountId if provided
+    const query: any = {};
+    if (accountId) {
+      query.accountId = accountId;
+    }
+    const dbTrades = await this.tradeModel.find(query).exec();
     
     // Also get live open trades from MT5 to ensure accuracy
     let mt5OpenCount = 0;

@@ -17,6 +17,9 @@ export type TradingLogDocument = TradingLog & Document;
 
 @Schema({ timestamps: { createdAt: true, updatedAt: false }, collection: 'trading_logs' })
 export class TradingLog {
+  @Prop({ index: true })
+  accountId: string;
+
   @Prop({ required: true, enum: TradingEventType, index: true })
   eventType: TradingEventType;
 

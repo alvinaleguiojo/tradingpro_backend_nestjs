@@ -18,6 +18,9 @@ export type TradeDocument = Trade & Document;
 
 @Schema({ timestamps: true, collection: 'trades' })
 export class Trade {
+  @Prop({ index: true })
+  accountId: string;
+
   @Prop()
   mt5Ticket: string;
 
@@ -75,3 +78,5 @@ export const TradeSchema = SchemaFactory.createForClass(Trade);
 // Compound indexes
 TradeSchema.index({ symbol: 1, status: 1 });
 TradeSchema.index({ openedAt: -1 });
+TradeSchema.index({ accountId: 1, status: 1 });
+TradeSchema.index({ accountId: 1, openedAt: -1 });

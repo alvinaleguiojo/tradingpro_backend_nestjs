@@ -28,13 +28,18 @@ export class TradingController {
   @Get('dashboard')
   @ApiOperation({ summary: 'Get all trading dashboard data in a single request' })
   @ApiQuery({ name: 'signalLimit', required: false, example: 10 })
-  async getDashboard(@Query('signalLimit') signalLimit: number = 10) {
+  @ApiQuery({ name: 'accountId', required: false, description: 'MT5 account ID to filter data by' })
+  async getDashboard(
+    @Query('signalLimit') signalLimit: number = 10,
+    @Query('accountId') queryAccountId?: string,
+  ) {
     const startTime = Date.now();
     
-    // Get account ID from MT5 service (uses the currently connected account)
-    // Fallback to MT5_USER config or 'default'
-    const accountId = this.mt5Service.getCurrentAccountId() || 
-                      this.configService.get('MT5_USER', 'default');
+    // Use provided accountId or fall back to currently connected account
+    const accountId = queryAccountId || 
+                      this.mt5Service.getCurrentAccountId() || 
+                      this.configService.get('MT5_USER', 'default') ||
+                      undefined;
     
     // First fetch MT5 status to get account balance
     let mt5Status: any = { isConnected: false };
@@ -83,7 +88,7 @@ export class TradingController {
           shouldStopTrading: { stop: false, reason: '' },
         };
       }),
-      this.tradingService.getTradeStats().catch(err => ({
+      this.tradingService.getTradeStats(accountId).catch(err => ({
         error: err.message,
         totalTrades: 0,
         openTrades: 0,
@@ -93,8 +98,8 @@ export class TradingController {
         winRate: 0,
         totalProfit: 0,
       })),
-      this.tradingService.getRecentSignals(signalLimit).catch(() => []),
-      this.tradingService.getOpenTrades().catch(() => []),
+      this.tradingService.getRecentSignals(signalLimit, accountId).catch(() => []),
+      this.tradingService.getOpenTrades(accountId).catch(() => []),
     ]);
 
     const duration = Date.now() - startTime;
@@ -156,8 +161,9 @@ export class TradingController {
 
   @Get('trades/open')
   @ApiOperation({ summary: 'Get open trades' })
-  async getOpenTrades() {
-    const trades = await this.tradingService.getOpenTrades();
+  @ApiQuery({ name: 'accountId', required: false, description: 'MT5 account ID to filter by' })
+  async getOpenTrades(@Query('accountId') accountId?: string) {
+    const trades = await this.tradingService.getOpenTrades(accountId);
     return {
       success: true,
       data: trades,
@@ -168,8 +174,12 @@ export class TradingController {
   @Get('signals')
   @ApiOperation({ summary: 'Get recent trading signals' })
   @ApiQuery({ name: 'limit', required: false, example: 20 })
-  async getRecentSignals(@Query('limit') limit: number = 20) {
-    const signals = await this.tradingService.getRecentSignals(limit);
+  @ApiQuery({ name: 'accountId', required: false, description: 'MT5 account ID to filter by' })
+  async getRecentSignals(
+    @Query('limit') limit: number = 20,
+    @Query('accountId') accountId?: string,
+  ) {
+    const signals = await this.tradingService.getRecentSignals(limit, accountId);
     return {
       success: true,
       data: signals,
@@ -180,8 +190,12 @@ export class TradingController {
   @Get('logs')
   @ApiOperation({ summary: 'Get trading logs' })
   @ApiQuery({ name: 'limit', required: false, example: 50 })
-  async getTradingLogs(@Query('limit') limit: number = 50) {
-    const logs = await this.tradingService.getTradingLogs(limit);
+  @ApiQuery({ name: 'accountId', required: false, description: 'MT5 account ID to filter by' })
+  async getTradingLogs(
+    @Query('limit') limit: number = 50,
+    @Query('accountId') accountId?: string,
+  ) {
+    const logs = await this.tradingService.getTradingLogs(limit, accountId);
     return {
       success: true,
       data: logs,
@@ -191,8 +205,9 @@ export class TradingController {
 
   @Get('stats')
   @ApiOperation({ summary: 'Get trade statistics' })
-  async getTradeStats() {
-    const stats = await this.tradingService.getTradeStats();
+  @ApiQuery({ name: 'accountId', required: false, description: 'MT5 account ID to filter by' })
+  async getTradeStats(@Query('accountId') accountId?: string) {
+    const stats = await this.tradingService.getTradeStats(accountId);
     return {
       success: true,
       data: stats,

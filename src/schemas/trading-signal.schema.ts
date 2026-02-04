@@ -18,6 +18,9 @@ export type TradingSignalDocument = TradingSignal & Document;
 
 @Schema({ timestamps: { createdAt: true, updatedAt: false }, collection: 'trading_signals' })
 export class TradingSignal {
+  @Prop({ index: true })
+  accountId: string;
+
   @Prop({ required: true, index: true })
   symbol: string;
 
