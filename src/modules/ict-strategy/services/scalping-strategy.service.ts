@@ -112,9 +112,9 @@ export class ScalpingStrategyService {
     const momentum = this.detectMomentum(candles.slice(-5));
     if (momentum) {
       if (momentum.direction === 'BUY') {
-        buySignals.push({ name: `Strong BUY momentum`, weight: 15 });
+        buySignals.push({ name: `Strong BUY momentum`, weight: 20 });
       } else {
-        sellSignals.push({ name: `Strong SELL momentum`, weight: 15 });
+        sellSignals.push({ name: `Strong SELL momentum`, weight: 20 });
       }
       this.logger.log(`✓ Momentum detected: ${momentum.direction}`);
     }
