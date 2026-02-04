@@ -170,14 +170,24 @@ export class MoneyManagementService implements OnModuleInit {
 
   /**
    * Get or create account state
+   * NOTE: This method assumes the MT5 service is already connected to the correct account.
    */
   async getOrCreateAccountState(accountId: string): Promise<TradingAccountStateDocument> {
     let state = await this.accountStateModel.findOne({ accountId }).exec();
     
     if (!state) {
-      // Get balance from MT5
-      const accountSummary = await this.mt5Service.getAccountSummary();
-      const balance = accountSummary?.balance || 100;
+      // Verify we're connected to the correct account before trusting the balance
+      const currentMt5Account = this.mt5Service.getCurrentAccountId();
+      let balance = 100; // Default if not connected to correct account
+      
+      if (currentMt5Account === accountId) {
+        // Get balance from MT5 - we're connected to the right account
+        const accountSummary = await this.mt5Service.getAccountSummary();
+        balance = accountSummary?.balance || 100;
+      } else {
+        this.logger.warn(`Creating state for ${accountId} but MT5 connected to ${currentMt5Account || 'none'} - using default balance`);
+      }
+      
       const level = this.getCurrentLevel(balance);
       
       state = new this.accountStateModel({
@@ -267,8 +277,21 @@ export class MoneyManagementService implements OnModuleInit {
 
   /**
    * Sync account state with MT5
+   * NOTE: This method assumes the MT5 service is already connected to the correct account.
+   * The caller (auto-trading.service) must ensure ensureMt5ConnectionForAccount is called first.
    */
   async syncWithMt5(accountId: string): Promise<TradingAccountStateDocument> {
+    // Verify we're connected to the correct account
+    const currentMt5Account = this.mt5Service.getCurrentAccountId();
+    if (currentMt5Account && currentMt5Account !== accountId) {
+      this.logger.warn(`MT5 connected to ${currentMt5Account} but trying to sync ${accountId} - using stored state`);
+      const existingState = await this.accountStateModel.findOne({ accountId }).exec();
+      if (existingState) {
+        return existingState;
+      }
+      // Fall through to create default state
+    }
+    
     const accountSummary = await this.mt5Service.getAccountSummary();
     
     if (!accountSummary || accountSummary.balance === undefined || accountSummary.balance === null) {
