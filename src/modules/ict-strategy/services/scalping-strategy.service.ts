@@ -22,22 +22,23 @@ export interface ScalpingConfig {
   allowCounterTrend: boolean;     // Allow trades against HTF trend
 }
 
-// Aggressive scalping defaults for XAU/USD
+// ULTRA AGGRESSIVE scalping defaults for XAU/USD
+// Optimized for quick in-and-out trades with tight risk management
 const AGGRESSIVE_SCALPING_CONFIG: ScalpingConfig = {
-  minConfidence: 20,              // Minimum confidence to trade (more aggressive)
-  minRiskReward: 1.5,             // Increased from 1.2 - better reward
-  maxSpreadPips: 30,              // Max 30 pips spread for gold
+  minConfidence: 15,              // Very aggressive - take more trades
+  minRiskReward: 1.2,             // Lower R:R for more frequent wins
+  maxSpreadPips: 40,              // Allow slightly higher spread
   
-  stopLossPips: 50,               // Tight 50 pip stop (5 dollars on 0.01 lot)
-  takeProfitPips: 100,            // Increased from 80 - allow more profit on winners
-  trailingStopPips: 40,           // Increased from 30 - give more room
+  stopLossPips: 30,               // TIGHT 30 pip stop ($3 on 0.01 lot) - quick cut losses
+  takeProfitPips: 50,             // Quick 50 pip TP ($5 on 0.01 lot) - take profits fast
+  trailingStopPips: 20,           // Tight trailing to lock profits
   
   usePartialTakeProfit: true,
   partialProfitPercent: 50,       // Close 50% at first target
-  breakEvenAtProfit: 40,          // Increased from 30 - move to BE after 40 pips
+  breakEvenAtProfit: 20,          // Move to BE quickly after 20 pips
   
   onlyTradeDuringKillZones: false, // Trade any time for scalping
-  allowCounterTrend: false,        // Changed to false - only trade with trend
+  allowCounterTrend: false,        // Only trade with trend for higher win rate
 };
 
 @Injectable()
@@ -108,13 +109,13 @@ export class ScalpingStrategyService {
       this.logger.log(`✓ Pin bar detected: ${pinBar.type} ${pinBar.direction}`);
     }
 
-    // === SCALPING SIGNAL 3: Three Candle Momentum (LOWER PRIORITY - often lagging) ===
+    // === SCALPING SIGNAL 3: Momentum (HIGH PRIORITY for aggressive scalping) ===
     const momentum = this.detectMomentum(candles.slice(-5));
     if (momentum) {
       if (momentum.direction === 'BUY') {
-        buySignals.push({ name: `Strong BUY momentum`, weight: 20 });
+        buySignals.push({ name: `Strong BUY momentum`, weight: 25 });
       } else {
-        sellSignals.push({ name: `Strong SELL momentum`, weight: 20 });
+        sellSignals.push({ name: `Strong SELL momentum`, weight: 25 });
       }
       this.logger.log(`✓ Momentum detected: ${momentum.direction}`);
     }
@@ -149,11 +150,11 @@ export class ScalpingStrategyService {
       }
     }
 
-    // === TREND FILTER: Check if price is above/below EMA50 ===
-    // Use full candle data for better trend detection (EMA50 on M5 = ~4 hours of data)
+    // === TREND FILTER: Check if price is above/below EMA20 ===
+    // AGGRESSIVE: EMA20 on M5 = ~1.5 hours - fast trend detection
     const trendDirection = this.getTrendDirection(candles);
     if (trendDirection) {
-      this.logger.log(`📊 Trend direction: ${trendDirection.direction} (price ${trendDirection.position} EMA50, distance: ${trendDirection.distancePercent.toFixed(2)}%)`);
+      this.logger.log(`📊 Trend direction: ${trendDirection.direction} (price ${trendDirection.position} EMA20, distance: ${trendDirection.distancePercent.toFixed(2)}%)`);
     }
 
     // === SCALPING SIGNAL 7: RSI Extremes (reversal signal) ===
@@ -360,14 +361,15 @@ export class ScalpingStrategyService {
 
     this.logger.log(`Momentum check: Net change ${netChange.toFixed(2)} (${netChangePercent.toFixed(3)}%), HH=${higherHighs}, LL=${lowerLows}, LH=${lowerHighs}, HL=${higherLows}`);
 
-    // Strong BULLISH momentum: net positive change AND mostly higher highs/higher lows
-    if (netChangePercent > 0.05 && higherHighs >= 3 && higherLows >= 2) {
+    // AGGRESSIVE: Lower thresholds for more trades
+    // BULLISH momentum: net positive change AND more higher highs than lower highs
+    if (netChangePercent > 0.02 && higherHighs >= 2 && higherHighs > lowerHighs) {
       this.logger.log(`✅ BULLISH momentum confirmed: +${netChangePercent.toFixed(3)}%`);
       return { direction: 'BUY', strength: netChange };
     }
     
-    // Strong BEARISH momentum: net negative change AND mostly lower highs/lower lows
-    if (netChangePercent < -0.05 && lowerHighs >= 3 && lowerLows >= 2) {
+    // BEARISH momentum: net negative change AND more lower lows than higher lows
+    if (netChangePercent < -0.02 && lowerLows >= 2 && lowerLows > higherLows) {
       this.logger.log(`✅ BEARISH momentum confirmed: ${netChangePercent.toFixed(3)}%`);
       return { direction: 'SELL', strength: Math.abs(netChange) };
     }
@@ -456,33 +458,32 @@ export class ScalpingStrategyService {
   }
 
   /**
-   * Get overall trend direction based on price position relative to EMA50
-   * EMA50 on M5 timeframe = ~4 hours of price data for better trend reading
+   * Get overall trend direction based on price position relative to EMA20
+   * EMA20 on M5 timeframe = ~1.5 hours - FAST trend detection for aggressive scalping
    * This is used as a trend filter to avoid trading against the main trend
    */
   private getTrendDirection(candles: Candle[]): { direction: 'BULLISH' | 'BEARISH'; position: string; distancePercent: number } | null {
-    if (candles.length < 50) {
-      this.logger.warn(`Not enough candles for trend filter: ${candles.length} (need 50+)`);
+    if (candles.length < 20) {
+      this.logger.warn(`Not enough candles for trend filter: ${candles.length} (need 20+)`);
       return null;
     }
 
     const closes = candles.map(c => c.close);
-    const ema50 = this.calculateEMA(closes, 50);
+    const ema20 = this.calculateEMA(closes, 20);
     
-    if (ema50.length === 0) return null;
+    if (ema20.length === 0) return null;
 
     const currentPrice = closes[closes.length - 1];
-    const currentEMA = ema50[ema50.length - 1];
+    const currentEMA = ema20[ema20.length - 1];
     
     // Calculate how far price is from EMA (as percentage)
     const distancePercent = ((currentPrice - currentEMA) / currentEMA) * 100;
     
-    this.logger.log(`📈 EMA50 trend check: Price=${currentPrice.toFixed(2)}, EMA50=${currentEMA.toFixed(2)}, Distance=${distancePercent.toFixed(3)}%`);
+    this.logger.log(`📈 EMA20 trend check: Price=${currentPrice.toFixed(2)}, EMA20=${currentEMA.toFixed(2)}, Distance=${distancePercent.toFixed(3)}%`);
     
-    // Require price to be at least 0.1% away from EMA to confirm trend
-    // This prevents choppy signals when price is hovering around EMA
-    if (Math.abs(distancePercent) < 0.1) {
-      this.logger.log(`⏸️ Price too close to EMA50 (${distancePercent.toFixed(3)}%) - no clear trend`);
+    // AGGRESSIVE: Only require 0.03% distance from EMA for trend confirmation
+    if (Math.abs(distancePercent) < 0.03) {
+      this.logger.log(`⏸️ Price too close to EMA20 (${distancePercent.toFixed(3)}%) - no clear trend`);
       return null; // Price is too close to EMA, no clear trend
     }
 
