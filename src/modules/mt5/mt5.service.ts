@@ -497,6 +497,43 @@ export class Mt5Service implements OnModuleInit {
     return uuidRegex.test(token);
   }
 
+  /**
+   * Check if MT5 API response is an error (they return errors on HTTP 200)
+   * Returns true if the response indicates an error
+   */
+  private isMt5ErrorResponse(data: any): boolean {
+    if (!data) return false;
+    // MT5 API returns error objects with 'code' field like INVALID_TOKEN, INVALID_PARAMETER, etc.
+    if (data.code && typeof data.code === 'string') {
+      return true;
+    }
+    // Also check for 'error' field
+    if (data.error) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Handle MT5 API error response - reconnect if token expired
+   * Returns true if we should retry the request after reconnection
+   */
+  private async handleMt5Error(data: any): Promise<boolean> {
+    if (data?.code === 'INVALID_TOKEN') {
+      this.logger.warn('MT5 token expired, forcing reconnection...');
+      this.token = null;
+      this.lastTokenValidation = 0;
+      try {
+        await this.connect();
+        return !!this.token; // Return true if we got a new token
+      } catch (error) {
+        this.logger.error('Failed to reconnect after token expiry:', error.message);
+        return false;
+      }
+    }
+    return false;
+  }
+
   async connect(): Promise<string> {
     const { user, password, host, port } = this.getCredentials();
 
@@ -739,6 +776,23 @@ export class Mt5Service implements OnModuleInit {
       const response = await this.axiosClient.get('/AccountSummary', {
         params: { id: this.token },
       });
+      
+      // Check if MT5 API returned an error (they return errors on HTTP 200)
+      if (this.isMt5ErrorResponse(response.data)) {
+        const shouldRetry = await this.handleMt5Error(response.data);
+        if (shouldRetry) {
+          // Retry with new token
+          const retryResponse = await this.axiosClient.get('/AccountSummary', {
+            params: { id: this.token },
+          });
+          if (!this.isMt5ErrorResponse(retryResponse.data)) {
+            return retryResponse.data;
+          }
+        }
+        this.logger.error('MT5 API error in getAccountSummary:', response.data);
+        return null;
+      }
+      
       return response.data;
     } catch (error) {
       this.logger.error('Failed to get account summary', error);
@@ -806,6 +860,23 @@ export class Mt5Service implements OnModuleInit {
       const response = await this.axiosClient.get('/GetQuote', {
         params: { id: this.token, symbol },
       });
+      
+      // Check if MT5 API returned an error (they return errors on HTTP 200)
+      if (this.isMt5ErrorResponse(response.data)) {
+        const shouldRetry = await this.handleMt5Error(response.data);
+        if (shouldRetry) {
+          // Retry with new token
+          const retryResponse = await this.axiosClient.get('/GetQuote', {
+            params: { id: this.token, symbol },
+          });
+          if (!this.isMt5ErrorResponse(retryResponse.data)) {
+            return retryResponse.data;
+          }
+        }
+        this.logger.error(`MT5 API error in getQuote for ${symbol}:`, response.data);
+        return null;
+      }
+      
       return response.data;
     } catch (error) {
       this.logger.error(`Failed to get quote for ${symbol}`, error);
@@ -949,6 +1020,23 @@ export class Mt5Service implements OnModuleInit {
       const response = await this.axiosClient.get('/OpenedOrders', {
         params: { id: this.token },
       });
+      
+      // Check if MT5 API returned an error (they return errors on HTTP 200)
+      if (this.isMt5ErrorResponse(response.data)) {
+        const shouldRetry = await this.handleMt5Error(response.data);
+        if (shouldRetry) {
+          // Retry with new token
+          const retryResponse = await this.axiosClient.get('/OpenedOrders', {
+            params: { id: this.token },
+          });
+          if (!this.isMt5ErrorResponse(retryResponse.data)) {
+            return retryResponse.data || [];
+          }
+        }
+        this.logger.error('MT5 API error in getOpenedOrders:', response.data);
+        return [];
+      }
+      
       return response.data || [];
     } catch (error) {
       this.logger.error('Failed to get opened orders', error);
@@ -1162,6 +1250,24 @@ export class Mt5Service implements OnModuleInit {
       const closedResponse = await this.axiosClient.get('/ClosedOrders', {
         params: { id: this.token },
       });
+      
+      // Check if MT5 API returned an error (they return errors on HTTP 200)
+      if (this.isMt5ErrorResponse(closedResponse.data)) {
+        const shouldRetry = await this.handleMt5Error(closedResponse.data);
+        if (shouldRetry) {
+          // Retry with new token
+          const retryResponse = await this.axiosClient.get('/ClosedOrders', {
+            params: { id: this.token },
+          });
+          if (!this.isMt5ErrorResponse(retryResponse.data)) {
+            const closedOrders = retryResponse.data || [];
+            this.logger.log(`Fetched ${Array.isArray(closedOrders) ? closedOrders.length : 0} closed orders (after retry)`);
+            return Array.isArray(closedOrders) ? closedOrders : [];
+          }
+        }
+        this.logger.error('MT5 API error in getTradeHistory:', closedResponse.data);
+        return [];
+      }
       
       const closedOrders = closedResponse.data || [];
       this.logger.log(`Fetched ${Array.isArray(closedOrders) ? closedOrders.length : 0} closed orders`);
