@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Query, Body } from '@nestjs/common';
+import { Controller, Get, Post, Query, Body, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { Mt5Service } from './mt5.service';
 
@@ -241,7 +241,6 @@ export class Mt5Controller {
       body.host,
       body.port || '443',
     );
-    
     // Try to connect with new credentials
     try {
       const token = await this.mt5Service.connect();
@@ -251,11 +250,12 @@ export class Mt5Controller {
         connected: true,
       };
     } catch (error: any) {
-      return {
+      // Throw HTTP 400 error for failed connection
+      throw new BadRequestException({
         success: false,
         message: error.message || 'Failed to connect',
         connected: false,
-      };
+      });
     }
   }
 
