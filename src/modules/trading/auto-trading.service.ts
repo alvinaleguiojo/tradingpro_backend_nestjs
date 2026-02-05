@@ -749,37 +749,72 @@ export class AutoTradingService implements OnModuleInit {
     
     this.logger.log(`Found ${accounts.length} active account(s) to refresh`);
     
-    // Process accounts with shorter delays for serverless compatibility
-    // Vercel has 10s (free) or 60s (pro) timeout
+    // Group accounts by broker server to prevent rate limiting
+    const accountsByServer = new Map<string, typeof accounts>();
+    for (const account of accounts) {
+      const serverKey = account.host || 'unknown';
+      if (!accountsByServer.has(serverKey)) {
+        accountsByServer.set(serverKey, []);
+      }
+      accountsByServer.get(serverKey)!.push(account);
+    }
+    
+    this.logger.log(`Accounts grouped into ${accountsByServer.size} broker server(s)`);
+    
     const results: { accountId: string; success: boolean; error?: string }[] = [];
     let successCount = 0;
     let failCount = 0;
 
-    for (const account of accounts) {
-      try {
-        this.logger.log(`🔄 Refreshing token for account ${account.user}...`);
-        
-        // Force reconnect by clearing cached token first
-        await this.mt5ConnectionModel.updateOne(
-          { _id: (account as any)._id },
-          { token: null }
-        );
-        
-        // Reconnect and get fresh token
-        await this.forceReconnectAccount(account);
-        successCount++;
-        results.push({ accountId: account.user, success: true });
-        this.logger.log(`✅ Token refreshed for account ${account.user}`);
-      } catch (error) {
-        failCount++;
-        const errorMsg = error instanceof Error ? error.message : String(error);
-        results.push({ accountId: account.user, success: false, error: errorMsg });
-        this.logger.error(`❌ Failed to refresh token for ${account.user}: ${errorMsg}`);
+    // Process one account per server in parallel, then wait before next batch
+    const serverQueues = Array.from(accountsByServer.values());
+    const maxIterations = Math.max(...serverQueues.map(q => q.length));
+    
+    for (let i = 0; i < maxIterations; i++) {
+      // Collect one account from each server for this batch
+      const batch: typeof accounts = [];
+      for (const queue of serverQueues) {
+        if (queue[i]) {
+          batch.push(queue[i]);
+        }
       }
       
-      // Reduced delay for serverless - only 500ms between accounts
-      if (accounts.indexOf(account) < accounts.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 500));
+      // Process batch in parallel (one per server, so no rate limit conflict)
+      const batchResults = await Promise.allSettled(
+        batch.map(async (account) => {
+          this.logger.log(`🔄 Refreshing token for account ${account.user}...`);
+          
+          // Force reconnect by clearing cached token first
+          await this.mt5ConnectionModel.updateOne(
+            { _id: (account as any)._id },
+            { token: null }
+          );
+          
+          // Reconnect and get fresh token
+          await this.forceReconnectAccount(account);
+          return account.user;
+        })
+      );
+      
+      // Process results
+      for (let j = 0; j < batch.length; j++) {
+        const result = batchResults[j];
+        const account = batch[j];
+        if (result.status === 'fulfilled') {
+          successCount++;
+          results.push({ accountId: account.user, success: true });
+          this.logger.log(`✅ Token refreshed for account ${account.user}`);
+        } else {
+          failCount++;
+          const errorMsg = result.reason?.message || String(result.reason);
+          results.push({ accountId: account.user, success: false, error: errorMsg });
+          this.logger.error(`❌ Failed to refresh token for ${account.user}: ${errorMsg}`);
+        }
+      }
+      
+      // Wait 6 seconds between batches to satisfy broker rate limits (5000ms minimum)
+      if (i < maxIterations - 1) {
+        this.logger.log(`⏳ Waiting 6s before next batch to avoid rate limiting...`);
+        await new Promise(resolve => setTimeout(resolve, 6000));
       }
     }
 
