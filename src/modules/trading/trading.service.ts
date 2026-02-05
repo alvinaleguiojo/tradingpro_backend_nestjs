@@ -327,6 +327,28 @@ export class TradingService implements OnModuleInit {
             scalpSetup.confidence = Math.min(100, scalpSetup.confidence + 15);
             scalpSetup.reasons.push(`AI confirmation: ${aiRecommendation.reasoning?.substring(0, 100) || 'Agrees with setup'}`);
 
+            // Create scalping signal WITH AI data
+            const signal = await this.createScalpingSignal(scalpSetup, symbol, analysisTimeframe, currentPrice, aiRecommendation);
+
+            await this.logEvent(
+              TradingEventType.SIGNAL_GENERATED,
+              `SCALP signal: ${signal.signalType} with ${signal.confidence}% confidence (AI confirmed)`,
+              { 
+                signalId: (signal as any)._id?.toString(),
+                mode: 'SCALPING_AI_CONFIRMED',
+                aiDirection: aiRecommendation.direction,
+                aiConfidence: aiRecommendation.confidence,
+                aiReasoning: aiRecommendation.reasoning,
+                ictReasons: scalpSetup.reasons,
+                confluences: scalpSetup.confluences,
+              },
+              'info',
+              undefined,
+              (signal as any)._id?.toString(),
+            );
+
+            return signal;
+
           } catch (aiError) {
             this.logger.warn(`AI confirmation failed, proceeding with ICT signal only: ${aiError.message}`);
             // Continue without AI if it fails - don't block the trade
@@ -336,7 +358,7 @@ export class TradingService implements OnModuleInit {
           return null;
         }
 
-        // Create scalping signal
+        // Create scalping signal without AI (fallback)
         const signal = await this.createScalpingSignal(scalpSetup, symbol, analysisTimeframe, currentPrice);
 
         await this.logEvent(
@@ -529,13 +551,14 @@ export class TradingService implements OnModuleInit {
   }
 
   /**
-   * Create a trading signal from scalping analysis (faster, no AI)
+   * Create a trading signal from scalping analysis (with AI confirmation)
    */
   private async createScalpingSignal(
     scalpSetup: TradeSetup,
     symbol: string,
     timeframe: string,
     currentPrice: number,
+    aiRecommendation?: AiTradeRecommendation,
   ): Promise<TradingSignalDocument> {
     const signalType = scalpSetup.direction === 'BUY' ? SignalType.BUY : SignalType.SELL;
     
@@ -545,6 +568,29 @@ export class TradingService implements OnModuleInit {
     else if (scalpSetup.confidence >= 50) strength = SignalStrength.STRONG;
     else if (scalpSetup.confidence >= 30) strength = SignalStrength.MODERATE;
     else strength = SignalStrength.WEAK;
+
+    // Build AI analysis data for frontend display
+    const aiAnalysisData = aiRecommendation ? {
+      mode: 'SCALPING_AI_CONFIRMED',
+      aiConfirmed: true,
+      aiDirection: aiRecommendation.direction,
+      aiConfidence: aiRecommendation.confidence,
+      aiReasoning: aiRecommendation.reasoning,
+      ictReasons: scalpSetup.reasons,
+      confluences: scalpSetup.confluences,
+      riskReward: scalpSetup.riskRewardRatio,
+    } : {
+      mode: 'SCALPING',
+      aiConfirmed: false,
+      ictReasons: scalpSetup.reasons,
+      confluences: scalpSetup.confluences,
+      riskReward: scalpSetup.riskRewardRatio,
+    };
+
+    // Build reasoning with AI insight
+    const reasoning = aiRecommendation 
+      ? `🤖 AI CONFIRMED: ${aiRecommendation.reasoning || 'Trade setup validated'}. ICT: ${scalpSetup.reasons.join(', ')}`
+      : `SCALP: ${scalpSetup.reasons.join(', ')}. Confluences: ${scalpSetup.confluences.join(', ')}`;
 
     const signal = new this.signalModel({
       accountId: this.mt5Service.getCurrentAccountId(),
@@ -557,20 +603,15 @@ export class TradingService implements OnModuleInit {
       takeProfit: scalpSetup.takeProfit,
       confidence: scalpSetup.confidence,
       ictAnalysis: {
-        marketStructure: 'SCALPING',
+        marketStructure: aiRecommendation ? 'SCALPING_AI_CONFIRMED' : 'SCALPING',
         orderBlocks: [],
         fairValueGaps: [],
         liquidityLevels: [],
         killZone: 'Scalping Mode',
         sessionBias: scalpSetup.direction,
       },
-      aiAnalysis: JSON.stringify({
-        mode: 'SCALPING',
-        reasons: scalpSetup.reasons,
-        confluences: scalpSetup.confluences,
-        riskReward: scalpSetup.riskRewardRatio,
-      }),
-      reasoning: `SCALP: ${scalpSetup.reasons.join(', ')}. Confluences: ${scalpSetup.confluences.join(', ')}`,
+      aiAnalysis: JSON.stringify(aiAnalysisData),
+      reasoning,
       executed: false,
     });
 
