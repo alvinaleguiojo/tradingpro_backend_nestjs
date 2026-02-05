@@ -35,8 +35,8 @@ export interface ScalpingConfig {
 // ULTRA AGGRESSIVE scalping defaults for XAU/USD
 // Optimized for quick in-and-out trades with ATR-based risk management
 const AGGRESSIVE_SCALPING_CONFIG: ScalpingConfig = {
-  minConfidence: 10,              // VERY LOW - take almost any setup
-  minRiskReward: 1.0,             // 1:1 minimum for maximum entries
+  minConfidence: 25,              // Increased from 10 to reduce noise
+  minRiskReward: 1.3,             // Increased from 1.0 for better quality
   maxSpreadPips: 50,              // Allow higher spread during volatile times
   
   // ATR-based SL/TP settings
@@ -130,10 +130,18 @@ export class ScalpingStrategyService {
     this.logger.log(`📊 Price vs AVG3: ${priceVsAvg3.toFixed(3)}%, vs AVG5: ${priceVsAvg5.toFixed(3)}%, vs AVG20: ${priceVsAvg20.toFixed(3)}%`);
     this.logger.log(`📊 Position in 20-candle range: ${positionInRange.toFixed(1)}% (Low: ${low20.toFixed(2)}, High: ${high20.toFixed(2)})`);
 
+    // ===== HIGHER TIMEFRAME TREND (20-candle trend) =====
+    // Calculate the overall trend direction to avoid counter-trend trades
+    const trendStart = last20[0].close;
+    const trendEnd = last20[last20.length - 1].close;
+    const htfTrendPct = ((trendEnd - trendStart) / trendStart) * 100;
+    const htfTrend = htfTrendPct > 0.1 ? 'BULLISH' : htfTrendPct < -0.1 ? 'BEARISH' : 'NEUTRAL';
+    this.logger.log(`📊 HTF Trend: ${htfTrend} (${htfTrendPct.toFixed(3)}%)`);
+    
     // ===== OVEREXTENSION DETECTION =====
-    // Prevent chasing moves that are already overextended
-    const isOverextendedDown = positionInRange < 15 && priceVsAvg20 < -0.5; // At bottom 15% AND >0.5% below 20-period avg
-    const isOverextendedUp = positionInRange > 85 && priceVsAvg20 > 0.5;    // At top 15% AND >0.5% above 20-period avg
+    // More strict thresholds to reduce false reversals
+    const isOverextendedDown = positionInRange < 10 && priceVsAvg20 < -0.8; // At bottom 10% AND >0.8% below 20-period avg
+    const isOverextendedUp = positionInRange > 90 && priceVsAvg20 > 0.8;    // At top 10% AND >0.8% above 20-period avg
     
     if (isOverextendedDown) {
       this.logger.log(`⚠️ OVEREXTENDED DOWN: Position ${positionInRange.toFixed(1)}% in range, ${priceVsAvg20.toFixed(2)}% below AVG20 - Looking for REVERSAL BUY`);
@@ -148,19 +156,24 @@ export class ScalpingStrategyService {
     const prevBullish = prevCandle.close > prevCandle.open;
     const engulfing = this.detectEngulfing(lastCandle, prevCandle);
     
-    // Bullish reversal from oversold
-    if (isOverextendedDown && lastBullish && !prevBullish) {
+    // ===== STRONGER REVERSAL CONFIRMATION =====
+    // Require more candle confirmation for reversals to avoid false signals
+    const thirdCandle = candles.length >= 3 ? candles[candles.length - 3] : null;
+    const thirdBullish = thirdCandle ? thirdCandle.close > thirdCandle.open : false;
+    
+    // Bullish reversal: Require 2 bullish candles after bearish, AND check HTF trend isn't strongly bearish
+    if (isOverextendedDown && lastBullish && prevBullish && !thirdBullish && htfTrend !== 'BEARISH') {
       direction = 'BUY';
-      confidence += 50;
-      reasons.push(`Bullish reversal from oversold (${positionInRange.toFixed(0)}% in range)`);
-      this.logger.log(`🔄 BULLISH REVERSAL detected at oversold level`);
+      confidence += 55;
+      reasons.push(`Strong bullish reversal from oversold (${positionInRange.toFixed(0)}% in range, 2 green candles)`);
+      this.logger.log(`🔄 STRONG BULLISH REVERSAL detected at oversold level`);
     }
-    // Bearish reversal from overbought
-    else if (isOverextendedUp && !lastBullish && prevBullish) {
+    // Bearish reversal: Require 2 bearish candles after bullish, AND check HTF trend isn't strongly bullish
+    else if (isOverextendedUp && !lastBullish && !prevBullish && thirdBullish && htfTrend !== 'BULLISH') {
       direction = 'SELL';
-      confidence += 50;
-      reasons.push(`Bearish reversal from overbought (${positionInRange.toFixed(0)}% in range)`);
-      this.logger.log(`🔄 BEARISH REVERSAL detected at overbought level`);
+      confidence += 55;
+      reasons.push(`Strong bearish reversal from overbought (${positionInRange.toFixed(0)}% in range, 2 red candles)`);
+      this.logger.log(`🔄 STRONG BEARISH REVERSAL detected at overbought level`);
     }
     // Bullish engulfing at oversold
     else if (isOverextendedDown && engulfing?.direction === 'BUY') {
@@ -179,28 +192,31 @@ export class ScalpingStrategyService {
       this.logger.log(`🔄 BEARISH ENGULFING at overbought`);
     }
 
-    // ===== SIGNAL 2: MOMENTUM (Only when NOT overextended) =====
-    // Standard momentum following - but BLOCKED when overextended in same direction
-    const momentumThreshold = 0.015; // 0.015% = ~$0.75 on Gold
+    // ===== SIGNAL 2: TREND-ALIGNED MOMENTUM =====
+    // Follow momentum ONLY when aligned with HTF trend
+    const momentumThreshold = 0.02; // Increased from 0.015% to reduce noise
     
     if (!direction) {
-      if (priceVsAvg3 > momentumThreshold && priceVsAvg5 > 0) {
-        // Don't BUY momentum when already overextended UP
+      // BUY momentum: Only when HTF trend is BULLISH or NEUTRAL (not against strong bearish)
+      if (priceVsAvg3 > momentumThreshold && priceVsAvg5 > 0 && htfTrend !== 'BEARISH') {
         if (!isOverextendedUp) {
           direction = 'BUY';
-          confidence += 40;
-          reasons.push(`Price above 3-candle avg (+${priceVsAvg3.toFixed(3)}%)`);
-          this.logger.log(`✅ BULLISH momentum: Price > AVG3`);
+          // Add bonus confidence if aligned with HTF trend
+          confidence += htfTrend === 'BULLISH' ? 50 : 35;
+          reasons.push(`Price above 3-candle avg (+${priceVsAvg3.toFixed(3)}%)${htfTrend === 'BULLISH' ? ' [HTF aligned]' : ''}`);
+          this.logger.log(`✅ BULLISH momentum: Price > AVG3, HTF: ${htfTrend}`);
         } else {
           this.logger.log(`⛔ Blocked BUY momentum - overextended up`);
         }
-      } else if (priceVsAvg3 < -momentumThreshold && priceVsAvg5 < 0) {
-        // Don't SELL momentum when already overextended DOWN
+      } 
+      // SELL momentum: Only when HTF trend is BEARISH or NEUTRAL (not against strong bullish)
+      else if (priceVsAvg3 < -momentumThreshold && priceVsAvg5 < 0 && htfTrend !== 'BULLISH') {
         if (!isOverextendedDown) {
           direction = 'SELL';
-          confidence += 40;
-          reasons.push(`Price below 3-candle avg (${priceVsAvg3.toFixed(3)}%)`);
-          this.logger.log(`✅ BEARISH momentum: Price < AVG3`);
+          // Add bonus confidence if aligned with HTF trend
+          confidence += htfTrend === 'BEARISH' ? 50 : 35;
+          reasons.push(`Price below 3-candle avg (${priceVsAvg3.toFixed(3)}%)${htfTrend === 'BEARISH' ? ' [HTF aligned]' : ''}`);
+          this.logger.log(`✅ BEARISH momentum: Price < AVG3, HTF: ${htfTrend}`);
         } else {
           this.logger.log(`⛔ Blocked SELL momentum - overextended down`);
         }
