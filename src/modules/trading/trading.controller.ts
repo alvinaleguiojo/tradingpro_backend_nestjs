@@ -245,15 +245,33 @@ export class TradingController {
   @Post('refresh-tokens')
   @ApiOperation({ summary: 'Refresh MT5 tokens for all accounts' })
   async refreshAllTokens() {
-    const result = await this.autoTradingService.refreshAllTokens();
-    return result;
+    try {
+      const result = await this.autoTradingService.refreshAllTokens();
+      return result;
+    } catch (error: any) {
+      return {
+        success: false,
+        message: `Token refresh failed: ${error.message}`,
+        error: error.message,
+        results: [],
+      };
+    }
   }
 
   @Get('refresh-tokens')
   @ApiOperation({ summary: 'Refresh MT5 tokens for all accounts (GET for cron)' })
   async refreshAllTokensGet() {
-    const result = await this.autoTradingService.refreshAllTokens();
-    return result;
+    try {
+      const result = await this.autoTradingService.refreshAllTokens();
+      return result;
+    } catch (error: any) {
+      return {
+        success: false,
+        message: `Token refresh failed: ${error.message}`,
+        error: error.message,
+        results: [],
+      };
+    }
   }
 
   @Get('timezone')

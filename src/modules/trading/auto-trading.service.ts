@@ -723,20 +723,42 @@ export class AutoTradingService implements OnModuleInit {
 
   /**
    * Manually refresh all tokens - can be called from API
+   * Optimized for Vercel serverless with reduced delays and parallel processing
    */
   async refreshAllTokens(): Promise<{
     success: boolean;
     message: string;
     results: { accountId: string; success: boolean; error?: string }[];
+    totalAccounts: number;
+    duration: number;
   }> {
+    const startTime = Date.now();
     this.logger.log('🔄 Manual token refresh triggered for all accounts...');
+    
     const accounts = await this.getAllActiveAccounts();
+    
+    if (accounts.length === 0) {
+      return {
+        success: true,
+        message: 'No active accounts found to refresh',
+        results: [],
+        totalAccounts: 0,
+        duration: Date.now() - startTime,
+      };
+    }
+    
+    this.logger.log(`Found ${accounts.length} active account(s) to refresh`);
+    
+    // Process accounts with shorter delays for serverless compatibility
+    // Vercel has 10s (free) or 60s (pro) timeout
     const results: { accountId: string; success: boolean; error?: string }[] = [];
     let successCount = 0;
     let failCount = 0;
 
     for (const account of accounts) {
       try {
+        this.logger.log(`🔄 Refreshing token for account ${account.user}...`);
+        
         // Force reconnect by clearing cached token first
         await this.mt5ConnectionModel.updateOne(
           { _id: (account as any)._id },
@@ -750,18 +772,26 @@ export class AutoTradingService implements OnModuleInit {
         this.logger.log(`✅ Token refreshed for account ${account.user}`);
       } catch (error) {
         failCount++;
-        results.push({ accountId: account.user, success: false, error: error.message });
-        this.logger.error(`❌ Failed to refresh token for ${account.user}: ${error.message}`);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        results.push({ accountId: account.user, success: false, error: errorMsg });
+        this.logger.error(`❌ Failed to refresh token for ${account.user}: ${errorMsg}`);
       }
       
-      // Small delay between accounts to avoid rate limiting
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // Reduced delay for serverless - only 500ms between accounts
+      if (accounts.indexOf(account) < accounts.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
     }
+
+    const duration = Date.now() - startTime;
+    this.logger.log(`🔄 Token refresh completed in ${duration}ms: ${successCount} success, ${failCount} failed`);
 
     return {
       success: failCount === 0,
       message: `Token refresh completed: ${successCount} success, ${failCount} failed`,
       results,
+      totalAccounts: accounts.length,
+      duration,
     };
   }
 

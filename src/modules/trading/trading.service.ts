@@ -268,15 +268,100 @@ export class TradingService implements OnModuleInit {
           `TP: ${scalpSetup.takeProfit.toFixed(2)} | R:R ${scalpSetup.riskRewardRatio}`
         );
 
-        // Create scalping signal (skip AI for speed)
+        // AI CONFIRMATION: Only for trades with ICT confidence >= 50%
+        // This filters out low-quality setups while keeping speed for obvious trades
+        const AI_CONFIRMATION_THRESHOLD = 50;
+        
+        if (scalpSetup.confidence >= AI_CONFIRMATION_THRESHOLD) {
+          this.logger.log(`🤖 ICT confidence ${scalpSetup.confidence}% >= ${AI_CONFIRMATION_THRESHOLD}% - Getting AI confirmation...`);
+          
+          try {
+            // Build ICT analysis result for AI
+            const ictAnalysisForAi: IctAnalysisResult = {
+              timestamp: new Date(),
+              symbol: symbol,
+              timeframe: analysisTimeframe,
+              marketStructure: {
+                trend: scalpSetup.direction === 'BUY' ? 'BULLISH' : 'BEARISH',
+                lastHigherHigh: null,
+                lastHigherLow: null,
+                lastLowerHigh: null,
+                lastLowerLow: null,
+                breakOfStructure: false,
+                changeOfCharacter: false,
+                currentSwingHigh: null,
+                currentSwingLow: null,
+              },
+              orderBlocks: [],
+              nearestBullishOB: null,
+              nearestBearishOB: null,
+              fairValueGaps: [],
+              unfilledFVGs: [],
+              liquidityLevels: [],
+              buyLiquidity: [],
+              sellLiquidity: [],
+              currentKillZone: this.killZoneService.getCurrentKillZone(),
+              sessionBias: scalpSetup.direction === 'BUY' ? 'BULLISH' : 'BEARISH',
+              tradeSetup: scalpSetup,
+            };
+
+            const aiRecommendation = await this.openAiService.analyzeMarket(
+              ictAnalysisForAi,
+              formattedCandles.slice(-20),
+              currentPrice,
+            );
+
+            // Check if AI agrees with the trade direction
+            const aiAgrees = aiRecommendation.shouldTrade && 
+                            aiRecommendation.direction === scalpSetup.direction &&
+                            aiRecommendation.confidence >= 50;
+
+            if (!aiAgrees) {
+              this.logger.log(
+                `❌ AI REJECTED scalp: AI says ${aiRecommendation.direction} (${aiRecommendation.confidence}% confidence), ` +
+                `ICT says ${scalpSetup.direction}. Skipping trade.`
+              );
+              await this.logEvent(
+                TradingEventType.MARKET_ANALYSIS,
+                `AI rejected scalp signal: AI ${aiRecommendation.direction} vs ICT ${scalpSetup.direction}`,
+                { 
+                  ictDirection: scalpSetup.direction,
+                  ictConfidence: scalpSetup.confidence,
+                  aiDirection: aiRecommendation.direction,
+                  aiConfidence: aiRecommendation.confidence,
+                  aiReasoning: aiRecommendation.reasoning,
+                },
+                'info',
+              );
+              return null;
+            }
+
+            this.logger.log(
+              `✅ AI CONFIRMED: ${aiRecommendation.direction} with ${aiRecommendation.confidence}% confidence`
+            );
+
+            // Boost confidence when AI agrees
+            scalpSetup.confidence = Math.min(100, scalpSetup.confidence + 15);
+            scalpSetup.reasons.push(`AI confirmation: ${aiRecommendation.reasoning?.substring(0, 100) || 'Agrees with setup'}`);
+
+          } catch (aiError) {
+            this.logger.warn(`AI confirmation failed, proceeding with ICT signal only: ${aiError.message}`);
+            // Continue without AI if it fails - don't block the trade
+          }
+        } else {
+          this.logger.log(`⚡ ICT confidence ${scalpSetup.confidence}% < ${AI_CONFIRMATION_THRESHOLD}% - Skipping (low confidence setup)`);
+          return null;
+        }
+
+        // Create scalping signal
         const signal = await this.createScalpingSignal(scalpSetup, symbol, analysisTimeframe, currentPrice);
 
         await this.logEvent(
           TradingEventType.SIGNAL_GENERATED,
-          `SCALP signal: ${signal.signalType} with ${signal.confidence}% confidence`,
+          `SCALP signal: ${signal.signalType} with ${signal.confidence}% confidence (AI confirmed)`,
           { 
             signalId: (signal as any)._id?.toString(),
-            mode: 'SCALPING',
+            mode: 'SCALPING_AI_CONFIRMED',
             reasons: scalpSetup.reasons,
             confluences: scalpSetup.confluences,
           },
