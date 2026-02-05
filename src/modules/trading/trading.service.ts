@@ -276,37 +276,20 @@ export class TradingService implements OnModuleInit {
           this.logger.log(`🤖 ICT confidence ${scalpSetup.confidence}% >= ${AI_CONFIRMATION_THRESHOLD}% - Getting AI confirmation...`);
           
           try {
-            // Build ICT analysis result for AI
-            const ictAnalysisForAi: IctAnalysisResult = {
-              timestamp: new Date(),
-              symbol: symbol,
-              timeframe: analysisTimeframe,
-              marketStructure: {
-                trend: scalpSetup.direction === 'BUY' ? 'BULLISH' : 'BEARISH',
-                lastHigherHigh: null,
-                lastHigherLow: null,
-                lastLowerHigh: null,
-                lastLowerLow: null,
-                breakOfStructure: false,
-                changeOfCharacter: false,
-                currentSwingHigh: null,
-                currentSwingLow: null,
-              },
-              orderBlocks: [],
-              nearestBullishOB: null,
-              nearestBearishOB: null,
-              fairValueGaps: [],
-              unfilledFVGs: [],
-              liquidityLevels: [],
-              buyLiquidity: [],
-              sellLiquidity: [],
-              currentKillZone: this.killZoneService.getCurrentKillZone(),
-              sessionBias: scalpSetup.direction === 'BUY' ? 'BULLISH' : 'BEARISH',
-              tradeSetup: scalpSetup,
-            };
+            // Run FULL ICT analysis for AI to have complete market context
+            const fullIctAnalysis = this.ictStrategyService.analyzeMarket(
+              formattedCandles,
+              symbol,
+              analysisTimeframe,
+            );
+            
+            // Override the trade setup with our scalping setup
+            fullIctAnalysis.tradeSetup = scalpSetup;
+            
+            this.logger.log(`📊 Sending full ICT analysis to AI: ${fullIctAnalysis.orderBlocks.length} OBs, ${fullIctAnalysis.fairValueGaps.length} FVGs, ${fullIctAnalysis.liquidityLevels.length} liquidity levels`);
 
             const aiRecommendation = await this.openAiService.analyzeMarket(
-              ictAnalysisForAi,
+              fullIctAnalysis,
               formattedCandles.slice(-20),
               currentPrice,
             );
