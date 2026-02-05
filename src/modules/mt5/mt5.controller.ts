@@ -27,7 +27,15 @@ export class Mt5Controller {
   async getAccountSummary(@Query('userId') userId?: string) {
     // If userId provided, ensure we're connected to the right account
     if (userId) {
-      await this.mt5Service.ensureAccountConnection(userId);
+      const connected = await this.mt5Service.ensureAccountConnection(userId);
+      if (!connected) {
+        return { 
+          success: false, 
+          error: 'CREDENTIALS_NOT_FOUND',
+          message: `Account ${userId} not found. Please re-login from the app.`,
+          connectedAccount: null 
+        };
+      }
     }
     const summary = await this.mt5Service.getAccountSummary();
     const currentAccount = this.mt5Service.getCurrentAccountId();
@@ -65,7 +73,15 @@ export class Mt5Controller {
   @ApiQuery({ name: 'userId', required: false, description: 'User ID to ensure correct account connection' })
   async getOpenedOrders(@Query('userId') userId?: string) {
     if (userId) {
-      await this.mt5Service.ensureAccountConnection(userId);
+      const connected = await this.mt5Service.ensureAccountConnection(userId);
+      if (!connected) {
+        return { 
+          success: false, 
+          error: 'CREDENTIALS_NOT_FOUND',
+          message: `Account ${userId} not found. Please re-login from the app.`,
+          connectedAccount: null 
+        };
+      }
     }
     const orders = await this.mt5Service.getOpenedOrders();
     const currentAccount = this.mt5Service.getCurrentAccountId();
@@ -78,7 +94,15 @@ export class Mt5Controller {
   @ApiQuery({ name: 'userId', required: false, description: 'User ID to ensure correct account connection' })
   async getClosedOrders(@Query('days') days: number = 30, @Query('userId') userId?: string) {
     if (userId) {
-      await this.mt5Service.ensureAccountConnection(userId);
+      const connected = await this.mt5Service.ensureAccountConnection(userId);
+      if (!connected) {
+        return { 
+          success: false, 
+          error: 'CREDENTIALS_NOT_FOUND',
+          message: `Account ${userId} not found. Please re-login from the app.`,
+          connectedAccount: null 
+        };
+      }
     }
     const orders = await this.mt5Service.getTradeHistory(days);
     const currentAccount = this.mt5Service.getCurrentAccountId();
