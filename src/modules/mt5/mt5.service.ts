@@ -154,17 +154,17 @@ export class Mt5Service implements OnModuleInit {
   }
 
   /**
-   * Set credentials from frontend login
+   * Set credentials from frontend login (in-memory only, not persisted until connect succeeds)
    */
   async setCredentials(user: string, password: string, host: string, port: string = '443'): Promise<void> {
     this.dynamicCredentials = { user, password, host, port };
     this.token = null; // Reset token to force reconnection
     this.currentTokenAccountId = user; // Track which account we're now using
     
-    // Persist to database for serverless
-    await this.saveCredentialsToDb(user, password, host, port);
+    // NOTE: Do NOT persist to database here - only save after successful connection
+    // This prevents saving invalid credentials that would pollute the database
     
-    this.logger.log(`MT5 credentials set for account ${user}`);
+    this.logger.log(`MT5 credentials set in memory for account ${user} (will persist after successful connect)`);
   }
 
   /**
@@ -553,16 +553,22 @@ export class Mt5Service implements OnModuleInit {
         this.currentTokenAccountId = user; // Track which account this token belongs to
         this.lastTokenValidation = Date.now(); // Mark as validated now
         
-        // Save connection info
+        // Save connection info (including password for serverless persistence)
         let connection = await this.mt5ConnectionModel.findOne({ user }).exec();
 
         if (!connection) {
           connection = new this.mt5ConnectionModel({
             accountId: user,
             user,
+            password, // Save password on successful connection
             host,
             port: parseInt(port),
           });
+        } else {
+          // Update password on existing connection (in case it changed)
+          (connection as any).password = password;
+          connection.host = host;
+          connection.port = parseInt(port);
         }
 
         connection.token = this.token || '';
