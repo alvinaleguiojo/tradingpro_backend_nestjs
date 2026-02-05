@@ -30,7 +30,8 @@ export class Mt5Controller {
       await this.mt5Service.ensureAccountConnection(userId);
     }
     const summary = await this.mt5Service.getAccountSummary();
-    return { success: true, data: summary };
+    const currentAccount = this.mt5Service.getCurrentAccountId();
+    return { success: true, data: summary, connectedAccount: currentAccount };
   }
 
   @Get('quote')
@@ -67,7 +68,8 @@ export class Mt5Controller {
       await this.mt5Service.ensureAccountConnection(userId);
     }
     const orders = await this.mt5Service.getOpenedOrders();
-    return { success: true, data: orders };
+    const currentAccount = this.mt5Service.getCurrentAccountId();
+    return { success: true, data: orders, connectedAccount: currentAccount };
   }
 
   @Get('orders/closed')
@@ -79,7 +81,8 @@ export class Mt5Controller {
       await this.mt5Service.ensureAccountConnection(userId);
     }
     const orders = await this.mt5Service.getTradeHistory(days);
-    return { success: true, data: orders, count: orders.length };
+    const currentAccount = this.mt5Service.getCurrentAccountId();
+    return { success: true, data: orders, count: orders.length, connectedAccount: currentAccount };
   }
 
   @Get('account/details')

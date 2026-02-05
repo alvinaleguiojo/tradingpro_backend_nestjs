@@ -104,45 +104,115 @@ export class ScalpingStrategyService {
     let confidence = 0;
     let direction: 'BUY' | 'SELL' | null = null;
 
-    // ===== SIMPLE MOMENTUM DETECTION =====
-    // Look at the last 3-5 candles to determine direction
+    // ===== EXTENDED ANALYSIS DATA =====
     const last5 = candles.slice(-5);
     const last3 = candles.slice(-3);
+    const last20 = candles.slice(-20);
     
-    // Calculate simple momentum: compare current price to 5-candle average
+    // Calculate averages for momentum
     const avg5 = last5.reduce((sum, c) => sum + c.close, 0) / 5;
     const avg3 = last3.reduce((sum, c) => sum + c.close, 0) / 3;
+    const avg20 = last20.reduce((sum, c) => sum + c.close, 0) / 20;
+    
+    // Price position relative to averages
     const priceVsAvg5 = ((currentPrice - avg5) / avg5) * 100;
     const priceVsAvg3 = ((currentPrice - avg3) / avg3) * 100;
-
-    this.logger.log(`📊 Price vs AVG5: ${priceVsAvg5.toFixed(3)}%, vs AVG3: ${priceVsAvg3.toFixed(3)}%`);
-
-    // ===== SIGNAL 1: SIMPLE MOMENTUM (Most Important) =====
-    // If price is moving away from the average, follow it
-    const momentumThreshold = 0.015; // 0.015% = ~$0.75 on Gold
+    const priceVsAvg20 = ((currentPrice - avg20) / avg20) * 100;
     
-    if (priceVsAvg3 > momentumThreshold && priceVsAvg5 > 0) {
-      direction = 'BUY';
-      confidence += 40;
-      reasons.push(`Price above 3-candle avg (+${priceVsAvg3.toFixed(3)}%)`);
-      this.logger.log(`✅ BULLISH momentum: Price > AVG3`);
-    } else if (priceVsAvg3 < -momentumThreshold && priceVsAvg5 < 0) {
-      direction = 'SELL';
-      confidence += 40;
-      reasons.push(`Price below 3-candle avg (${priceVsAvg3.toFixed(3)}%)`);
-      this.logger.log(`✅ BEARISH momentum: Price < AVG3`);
+    // Calculate 20-candle high/low for overextension detection
+    const high20 = Math.max(...last20.map(c => c.high));
+    const low20 = Math.min(...last20.map(c => c.low));
+    const range20 = high20 - low20;
+    
+    // Position in range (0 = at low, 100 = at high)
+    const positionInRange = range20 > 0 ? ((currentPrice - low20) / range20) * 100 : 50;
+    
+    this.logger.log(`📊 Price vs AVG3: ${priceVsAvg3.toFixed(3)}%, vs AVG5: ${priceVsAvg5.toFixed(3)}%, vs AVG20: ${priceVsAvg20.toFixed(3)}%`);
+    this.logger.log(`📊 Position in 20-candle range: ${positionInRange.toFixed(1)}% (Low: ${low20.toFixed(2)}, High: ${high20.toFixed(2)})`);
+
+    // ===== OVEREXTENSION DETECTION =====
+    // Prevent chasing moves that are already overextended
+    const isOverextendedDown = positionInRange < 15 && priceVsAvg20 < -0.5; // At bottom 15% AND >0.5% below 20-period avg
+    const isOverextendedUp = positionInRange > 85 && priceVsAvg20 > 0.5;    // At top 15% AND >0.5% above 20-period avg
+    
+    if (isOverextendedDown) {
+      this.logger.log(`⚠️ OVEREXTENDED DOWN: Position ${positionInRange.toFixed(1)}% in range, ${priceVsAvg20.toFixed(2)}% below AVG20 - Looking for REVERSAL BUY`);
+    }
+    if (isOverextendedUp) {
+      this.logger.log(`⚠️ OVEREXTENDED UP: Position ${positionInRange.toFixed(1)}% in range, ${priceVsAvg20.toFixed(2)}% above AVG20 - Looking for REVERSAL SELL`);
     }
 
-    // ===== SIGNAL 2: CANDLE DIRECTION =====
-    // Last 2-3 candles moving in same direction = confirmation
+    // ===== SIGNAL 1: REVERSAL DETECTION (Priority for overextended markets) =====
+    // Look for reversal signals when market is stretched
     const lastBullish = lastCandle.close > lastCandle.open;
     const prevBullish = prevCandle.close > prevCandle.open;
+    const engulfing = this.detectEngulfing(lastCandle, prevCandle);
     
+    // Bullish reversal from oversold
+    if (isOverextendedDown && lastBullish && !prevBullish) {
+      direction = 'BUY';
+      confidence += 50;
+      reasons.push(`Bullish reversal from oversold (${positionInRange.toFixed(0)}% in range)`);
+      this.logger.log(`🔄 BULLISH REVERSAL detected at oversold level`);
+    }
+    // Bearish reversal from overbought
+    else if (isOverextendedUp && !lastBullish && prevBullish) {
+      direction = 'SELL';
+      confidence += 50;
+      reasons.push(`Bearish reversal from overbought (${positionInRange.toFixed(0)}% in range)`);
+      this.logger.log(`🔄 BEARISH REVERSAL detected at overbought level`);
+    }
+    // Bullish engulfing at oversold
+    else if (isOverextendedDown && engulfing?.direction === 'BUY') {
+      direction = 'BUY';
+      confidence += 55;
+      reasons.push(`Bullish engulfing at oversold level`);
+      confluences.push('Reversal pattern');
+      this.logger.log(`🔄 BULLISH ENGULFING at oversold`);
+    }
+    // Bearish engulfing at overbought
+    else if (isOverextendedUp && engulfing?.direction === 'SELL') {
+      direction = 'SELL';
+      confidence += 55;
+      reasons.push(`Bearish engulfing at overbought level`);
+      confluences.push('Reversal pattern');
+      this.logger.log(`🔄 BEARISH ENGULFING at overbought`);
+    }
+
+    // ===== SIGNAL 2: MOMENTUM (Only when NOT overextended) =====
+    // Standard momentum following - but BLOCKED when overextended in same direction
+    const momentumThreshold = 0.015; // 0.015% = ~$0.75 on Gold
+    
+    if (!direction) {
+      if (priceVsAvg3 > momentumThreshold && priceVsAvg5 > 0) {
+        // Don't BUY momentum when already overextended UP
+        if (!isOverextendedUp) {
+          direction = 'BUY';
+          confidence += 40;
+          reasons.push(`Price above 3-candle avg (+${priceVsAvg3.toFixed(3)}%)`);
+          this.logger.log(`✅ BULLISH momentum: Price > AVG3`);
+        } else {
+          this.logger.log(`⛔ Blocked BUY momentum - overextended up`);
+        }
+      } else if (priceVsAvg3 < -momentumThreshold && priceVsAvg5 < 0) {
+        // Don't SELL momentum when already overextended DOWN
+        if (!isOverextendedDown) {
+          direction = 'SELL';
+          confidence += 40;
+          reasons.push(`Price below 3-candle avg (${priceVsAvg3.toFixed(3)}%)`);
+          this.logger.log(`✅ BEARISH momentum: Price < AVG3`);
+        } else {
+          this.logger.log(`⛔ Blocked SELL momentum - overextended down`);
+        }
+      }
+    }
+
+    // ===== SIGNAL 3: CANDLE DIRECTION (Confirmation) =====
     if (lastBullish && prevBullish) {
       if (direction === 'BUY') {
         confidence += 25;
         confluences.push('2 bullish candles');
-      } else if (!direction) {
+      } else if (!direction && !isOverextendedUp) {
         direction = 'BUY';
         confidence += 30;
         reasons.push('2 consecutive bullish candles');
@@ -151,21 +221,20 @@ export class ScalpingStrategyService {
       if (direction === 'SELL') {
         confidence += 25;
         confluences.push('2 bearish candles');
-      } else if (!direction) {
+      } else if (!direction && !isOverextendedDown) {
         direction = 'SELL';
         confidence += 30;
         reasons.push('2 consecutive bearish candles');
       }
     }
 
-    // ===== SIGNAL 3: BREAKOUT DETECTION =====
-    // Price breaking recent high/low = strong momentum
+    // ===== SIGNAL 4: BREAKOUT DETECTION (Modified) =====
     const recentHigh = Math.max(...candles.slice(-10).map(c => c.high));
     const recentLow = Math.min(...candles.slice(-10).map(c => c.low));
     const range = recentHigh - recentLow;
     
-    if (currentPrice > recentHigh - (range * 0.1)) {
-      // Near or breaking recent high
+    // Only add breakout confluence if NOT overextended
+    if (currentPrice > recentHigh - (range * 0.1) && !isOverextendedUp) {
       if (direction === 'BUY') {
         confidence += 20;
         confluences.push('Breaking recent high');
@@ -175,8 +244,7 @@ export class ScalpingStrategyService {
         reasons.push('Price at 10-candle high');
       }
       this.logger.log(`📈 Price near 10-candle HIGH: ${recentHigh.toFixed(2)}`);
-    } else if (currentPrice < recentLow + (range * 0.1)) {
-      // Near or breaking recent low
+    } else if (currentPrice < recentLow + (range * 0.1) && !isOverextendedDown) {
       if (direction === 'SELL') {
         confidence += 20;
         confluences.push('Breaking recent low');
@@ -188,18 +256,14 @@ export class ScalpingStrategyService {
       this.logger.log(`📉 Price near 10-candle LOW: ${recentLow.toFixed(2)}`);
     }
 
-    // ===== SIGNAL 4: QUICK REVERSAL (Optional Bonus) =====
-    // Pin bar or engulfing for extra confidence
-    const engulfing = this.detectEngulfing(lastCandle, prevCandle);
-    if (engulfing) {
-      if (engulfing.direction === direction) {
-        confidence += 15;
-        confluences.push(`${engulfing.type} engulfing`);
-      } else if (!direction) {
-        direction = engulfing.direction;
-        confidence += 30;
-        reasons.push(`${engulfing.type} engulfing pattern`);
-      }
+    // ===== SIGNAL 5: ENGULFING PATTERN (Non-reversal context) =====
+    if (engulfing && !direction) {
+      direction = engulfing.direction;
+      confidence += 30;
+      reasons.push(`${engulfing.type} engulfing pattern`);
+    } else if (engulfing && engulfing.direction === direction) {
+      confidence += 15;
+      confluences.push(`${engulfing.type} engulfing`);
     }
 
     // No direction determined
