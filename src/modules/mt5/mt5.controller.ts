@@ -370,11 +370,6 @@ export class Mt5Controller {
       page: currentPage,
       pageSize,
       totalPages,
-      debug: {
-        requestedUserId: userId,
-        connectionResult,
-        currentConnectedAccount: currentAccount,
-      }
     };
   }
 
