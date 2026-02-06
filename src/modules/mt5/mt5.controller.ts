@@ -355,6 +355,17 @@ export class Mt5Controller {
     }
     const currentAccount = this.mt5Service.getCurrentAccountId();
     const history = await this.mt5Service.getTradeHistory(days);
+
+    // Sort by closeTime descending (most recent trades first)
+    history.sort((a: any, b: any) => {
+      const timeA = new Date(a.closeTime || 0).getTime();
+      const timeB = new Date(b.closeTime || 0).getTime();
+      return timeB - timeA;
+    });
+
+    // Calculate totalProfit across ALL trades (not just the page)
+    const totalProfit = history.reduce((sum: number, t: any) => sum + (Number(t.profit) || 0), 0);
+
     // Pagination logic
     const total = history.length;
     const totalPages = Math.ceil(total / pageSize);
@@ -367,6 +378,7 @@ export class Mt5Controller {
       data: paginated,
       count: paginated.length,
       total,
+      totalProfit: Math.round(totalProfit * 100) / 100,
       page: currentPage,
       pageSize,
       totalPages,
