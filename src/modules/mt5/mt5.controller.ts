@@ -345,6 +345,8 @@ export class Mt5Controller {
   async getTradeHistory(
     @Query('days') days: number = 30,
     @Query('userId') userId?: string,
+    @Query('page') page: number = 1,
+    @Query('pageSize') pageSize: number = 50,
   ) {
     // Ensure we're connected to the right account
     let connectionResult: boolean | null = null;
@@ -353,10 +355,21 @@ export class Mt5Controller {
     }
     const currentAccount = this.mt5Service.getCurrentAccountId();
     const history = await this.mt5Service.getTradeHistory(days);
-    return { 
-      success: true, 
-      data: history, 
-      count: history.length,
+    // Pagination logic
+    const total = history.length;
+    const totalPages = Math.ceil(total / pageSize);
+    const currentPage = Math.max(1, Math.min(page, totalPages));
+    const start = (currentPage - 1) * pageSize;
+    const end = start + pageSize;
+    const paginated = history.slice(start, end);
+    return {
+      success: true,
+      data: paginated,
+      count: paginated.length,
+      total,
+      page: currentPage,
+      pageSize,
+      totalPages,
       debug: {
         requestedUserId: userId,
         connectionResult,
