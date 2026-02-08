@@ -27,6 +27,9 @@ export class AutoTradingService implements OnModuleInit {
   private readonly CYCLE_LOCK_TIMEOUT_MS = 120000; // 2 minute cycle lock timeout
   private readonly CYCLE_LOCK_ID = 'GLOBAL_TRADING_CYCLE'; // Special ID for cycle lock
 
+  // EA Bridge mode — crons are disabled, EA sync triggers analysis
+  private readonly eaBridgeEnabled: boolean;
+
   constructor(
     private configService: ConfigService,
     private tradingService: TradingService,
@@ -39,12 +42,18 @@ export class AutoTradingService implements OnModuleInit {
     // Initialize from environment variable
     this.isEnabled = this.configService.get('AUTO_TRADING_ENABLED', 'true') === 'true';
     this.scalpingMode = this.configService.get('SCALPING_MODE', 'true') === 'true';
+    this.eaBridgeEnabled = this.configService.get('EA_BRIDGE_ENABLED', 'false') === 'true';
   }
 
   async onModuleInit() {
+    if (this.eaBridgeEnabled) {
+      this.logger.log('Auto Trading Service initialized in EA BRIDGE mode (crons disabled — EA sync triggers analysis)');
+      return;
+    }
+
     const mode = this.scalpingMode ? '⚡ AGGRESSIVE SCALPING (5min cycles)' : '📊 Standard ICT (15min cycles)';
     this.logger.log(`Auto Trading Service initialized. Enabled: ${this.isEnabled}, Mode: ${mode}`);
-    
+
     // Run initial analysis on startup (after a delay to ensure MT5 connection)
     if (this.isEnabled) {
       setTimeout(() => this.runTradingCycle(), 10000);
@@ -131,6 +140,7 @@ export class AutoTradingService implements OnModuleInit {
    */
   @Cron('0 */5 * * * *') // Every 5 minutes
   async handleScalpingCron() {
+    if (this.eaBridgeEnabled) return; // EA sync triggers analysis
     if (this.scalpingMode && this.tradingService.isScalpingMode()) {
       await this.runTradingCycle();
     }
@@ -141,6 +151,7 @@ export class AutoTradingService implements OnModuleInit {
    */
   @Cron('0 */15 * * * *') // At minute 0, 15, 30, 45
   async handleTradingCron() {
+    if (this.eaBridgeEnabled) return; // EA sync triggers analysis
     if (!this.scalpingMode || !this.tradingService.isScalpingMode()) {
       await this.runTradingCycle();
     }
@@ -153,6 +164,7 @@ export class AutoTradingService implements OnModuleInit {
    */
   @Cron('0 */20 * * * *') // Every 20 minutes
   async handleTokenRefreshCron() {
+    if (this.eaBridgeEnabled) return; // No mtapi.io tokens to refresh
     this.logger.log('🔄 Starting token refresh for all accounts...');
     const accounts = await this.getAllActiveAccounts();
     let successCount = 0;
@@ -216,6 +228,7 @@ export class AutoTradingService implements OnModuleInit {
    */
   @Cron('0 */2 * * * *')
   async handleSyncCron() {
+    if (this.eaBridgeEnabled) return; // EA pushes positions directly
     try {
       const accounts = await this.getAllActiveAccounts();
       

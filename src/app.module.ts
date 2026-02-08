@@ -9,6 +9,7 @@ import { IctStrategyModule } from './modules/ict-strategy/ict-strategy.module';
 import { OpenAiModule } from './modules/openai/openai.module';
 import { MoneyManagementModule } from './modules/money-management/money-management.module';
 import { ChatModule } from './modules/chat/chat.module';
+import { EaBridgeModule } from './modules/ea-bridge/ea-bridge.module';
 import { HealthController } from './health.controller';
 
 @Module({
@@ -52,6 +53,7 @@ import { HealthController } from './health.controller';
     OpenAiModule,
     MoneyManagementModule,
     ChatModule,
+    EaBridgeModule,
   ],
   controllers: [HealthController],
 })

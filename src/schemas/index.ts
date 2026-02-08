@@ -6,3 +6,5 @@ export * from './trading-log.schema';
 export * from './money-management-level.schema';
 export * from './trading-account-state.schema';
 export * from './trade-lock.schema';
+export * from './ea-command.schema';
+export * from './ea-session.schema';

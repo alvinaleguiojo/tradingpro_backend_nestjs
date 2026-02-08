@@ -479,6 +479,248 @@ export class TradingService implements OnModuleInit {
   }
 
   /**
+   * Analyze from pre-fetched data pushed by the EA (no mtapi.io calls)
+   */
+  async analyzeFromPushedData(
+    candles: Candle[],
+    currentPrice: number,
+    spread: number,
+    accountId: string,
+    symbol: string,
+    timeframe: string = 'M5',
+  ): Promise<TradingSignalDocument | null> {
+    try {
+      const minCandles = this.scalpingMode ? 20 : 50;
+      if (candles.length < minCandles) {
+        this.logger.warn(`EA pushed insufficient candles: ${candles.length} (need ${minCandles})`);
+        return null;
+      }
+
+      this.logger.log(`[EA] Analyzing ${candles.length} candles for ${symbol} ${timeframe} (account ${accountId})`);
+
+      if (this.scalpingMode) {
+        if (this.ictStrategyService.isHighImpactNewsTime()) {
+          this.logger.log('[EA] Scalping paused — high-impact news time');
+          return null;
+        }
+
+        const scalpSetup = this.scalpingStrategy.analyzeForScalp(candles, currentPrice, spread);
+        if (!scalpSetup) {
+          this.logger.log('[EA] No scalping setup found');
+          return null;
+        }
+
+        this.logger.log(
+          `[EA] SCALP SIGNAL: ${scalpSetup.direction} | Confidence: ${scalpSetup.confidence}% | ` +
+          `Entry: ${currentPrice.toFixed(2)} | SL: ${scalpSetup.stopLoss.toFixed(2)} | ` +
+          `TP: ${scalpSetup.takeProfit.toFixed(2)} | R:R ${scalpSetup.riskRewardRatio}`
+        );
+
+        const AI_CONFIRMATION_THRESHOLD = 50;
+
+        if (scalpSetup.confidence >= AI_CONFIRMATION_THRESHOLD) {
+          this.logger.log(`[EA] Confidence ${scalpSetup.confidence}% >= ${AI_CONFIRMATION_THRESHOLD}% — getting AI confirmation`);
+
+          try {
+            const fullIctAnalysis = this.ictStrategyService.analyzeMarket(candles, symbol, timeframe);
+            fullIctAnalysis.tradeSetup = scalpSetup;
+
+            const aiRecommendation = await this.openAiService.analyzeMarket(
+              fullIctAnalysis,
+              candles.slice(-20),
+              currentPrice,
+            );
+
+            const aiAgrees =
+              aiRecommendation.shouldTrade &&
+              aiRecommendation.direction === scalpSetup.direction &&
+              aiRecommendation.confidence >= 50;
+
+            if (!aiAgrees) {
+              this.logger.log(`[EA] AI REJECTED: AI says ${aiRecommendation.direction} (${aiRecommendation.confidence}%), ICT says ${scalpSetup.direction}`);
+              return null;
+            }
+
+            this.logger.log(`[EA] AI CONFIRMED: ${aiRecommendation.direction} (${aiRecommendation.confidence}%)`);
+            scalpSetup.confidence = Math.min(100, scalpSetup.confidence + 15);
+            scalpSetup.reasons.push(`AI confirmation: ${aiRecommendation.reasoning?.substring(0, 100) || 'Agrees with setup'}`);
+
+            return await this.createScalpingSignalForAccount(scalpSetup, symbol, timeframe, currentPrice, accountId, aiRecommendation);
+          } catch (aiError) {
+            this.logger.warn(`[EA] AI failed, proceeding with ICT signal only: ${aiError.message}`);
+          }
+        } else {
+          this.logger.log(`[EA] Confidence ${scalpSetup.confidence}% < ${AI_CONFIRMATION_THRESHOLD}% — skipping`);
+          return null;
+        }
+
+        return await this.createScalpingSignalForAccount(scalpSetup, symbol, timeframe, currentPrice, accountId);
+      }
+
+      // Standard ICT mode
+      const ictAnalysis = this.ictStrategyService.analyzeMarket(candles, symbol, timeframe);
+      const aiRecommendation = await this.openAiService.analyzeMarket(
+        ictAnalysis,
+        candles.slice(-20),
+        currentPrice,
+      );
+
+      const signal = await this.createSignalForAccount(ictAnalysis, aiRecommendation, currentPrice, accountId);
+
+      await this.logEvent(
+        TradingEventType.SIGNAL_GENERATED,
+        `[EA] Signal: ${signal.signalType} (${signal.confidence}% confidence)`,
+        { signalId: (signal as any)._id?.toString() },
+        'info',
+        undefined,
+        (signal as any)._id?.toString(),
+        accountId,
+      );
+
+      return signal;
+    } catch (error) {
+      this.logger.error(`[EA] Analysis failed for ${accountId}: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Create scalping signal with explicit accountId (for EA bridge)
+   */
+  private async createScalpingSignalForAccount(
+    scalpSetup: TradeSetup,
+    symbol: string,
+    timeframe: string,
+    currentPrice: number,
+    accountId: string,
+    aiRecommendation?: AiTradeRecommendation,
+  ): Promise<TradingSignalDocument> {
+    const signalType = scalpSetup.direction === 'BUY' ? SignalType.BUY : SignalType.SELL;
+
+    let strength: SignalStrength;
+    if (scalpSetup.confidence >= 70) strength = SignalStrength.VERY_STRONG;
+    else if (scalpSetup.confidence >= 50) strength = SignalStrength.STRONG;
+    else if (scalpSetup.confidence >= 30) strength = SignalStrength.MODERATE;
+    else strength = SignalStrength.WEAK;
+
+    const aiAnalysisData = aiRecommendation
+      ? {
+          mode: 'SCALPING_AI_CONFIRMED',
+          aiConfirmed: true,
+          aiDirection: aiRecommendation.direction,
+          aiConfidence: aiRecommendation.confidence,
+          aiReasoning: aiRecommendation.reasoning,
+          ictReasons: scalpSetup.reasons,
+          confluences: scalpSetup.confluences,
+          riskReward: scalpSetup.riskRewardRatio,
+        }
+      : {
+          mode: 'SCALPING_EA',
+          aiConfirmed: false,
+          ictReasons: scalpSetup.reasons,
+          confluences: scalpSetup.confluences,
+          riskReward: scalpSetup.riskRewardRatio,
+        };
+
+    const reasoning = aiRecommendation
+      ? `AI CONFIRMED: ${aiRecommendation.reasoning || 'Validated'}. ICT: ${scalpSetup.reasons.join(', ')}`
+      : `SCALP: ${scalpSetup.reasons.join(', ')}. Confluences: ${scalpSetup.confluences.join(', ')}`;
+
+    const signal = new this.signalModel({
+      accountId,
+      symbol,
+      timeframe,
+      signalType,
+      strength,
+      entryPrice: currentPrice,
+      stopLoss: scalpSetup.stopLoss,
+      takeProfit: scalpSetup.takeProfit,
+      confidence: scalpSetup.confidence,
+      ictAnalysis: {
+        marketStructure: aiRecommendation ? 'SCALPING_AI_CONFIRMED' : 'SCALPING_EA',
+        orderBlocks: [],
+        fairValueGaps: [],
+        liquidityLevels: [],
+        killZone: 'Scalping Mode',
+        sessionBias: scalpSetup.direction,
+      },
+      aiAnalysis: JSON.stringify(aiAnalysisData),
+      reasoning,
+      executed: false,
+    });
+
+    return await signal.save();
+  }
+
+  /**
+   * Create a trading signal with explicit accountId (for EA bridge)
+   */
+  private async createSignalForAccount(
+    ictAnalysis: IctAnalysisResult,
+    aiRecommendation: AiTradeRecommendation,
+    currentPrice: number,
+    accountId: string,
+  ): Promise<TradingSignalDocument> {
+    let signalType: SignalType;
+    let entryPrice: number;
+    let stopLoss: number;
+    let takeProfit: number;
+    let confidence: number;
+
+    if (aiRecommendation.shouldTrade) {
+      signalType = aiRecommendation.direction === 'BUY' ? SignalType.BUY :
+                   aiRecommendation.direction === 'SELL' ? SignalType.SELL : SignalType.HOLD;
+      entryPrice = aiRecommendation.entryPrice;
+      stopLoss = aiRecommendation.stopLoss;
+      takeProfit = aiRecommendation.takeProfit;
+      confidence = aiRecommendation.confidence;
+    } else if (ictAnalysis.tradeSetup) {
+      signalType = ictAnalysis.tradeSetup.direction === 'BUY' ? SignalType.BUY : SignalType.SELL;
+      entryPrice = ictAnalysis.tradeSetup.entryPrice;
+      stopLoss = ictAnalysis.tradeSetup.stopLoss;
+      takeProfit = ictAnalysis.tradeSetup.takeProfit;
+      confidence = ictAnalysis.tradeSetup.confidence;
+    } else {
+      signalType = SignalType.HOLD;
+      entryPrice = currentPrice;
+      stopLoss = currentPrice;
+      takeProfit = currentPrice;
+      confidence = 0;
+    }
+
+    let strength: SignalStrength;
+    if (confidence >= 80) strength = SignalStrength.VERY_STRONG;
+    else if (confidence >= 60) strength = SignalStrength.STRONG;
+    else if (confidence >= 40) strength = SignalStrength.MODERATE;
+    else strength = SignalStrength.WEAK;
+
+    const signal = new this.signalModel({
+      accountId,
+      symbol: ictAnalysis.symbol,
+      timeframe: ictAnalysis.timeframe,
+      signalType,
+      strength,
+      entryPrice,
+      stopLoss,
+      takeProfit,
+      confidence,
+      ictAnalysis: {
+        marketStructure: ictAnalysis.marketStructure.trend,
+        orderBlocks: ictAnalysis.orderBlocks.filter((ob) => ob.valid).slice(0, 5),
+        fairValueGaps: ictAnalysis.unfilledFVGs.slice(0, 5),
+        liquidityLevels: [...ictAnalysis.buyLiquidity.slice(0, 3), ...ictAnalysis.sellLiquidity.slice(0, 3)],
+        killZone: ictAnalysis.currentKillZone?.name || 'None',
+        sessionBias: ictAnalysis.sessionBias,
+      },
+      aiAnalysis: JSON.stringify(aiRecommendation),
+      reasoning: aiRecommendation.reasoning,
+      executed: false,
+    });
+
+    return await signal.save();
+  }
+
+  /**
    * Create a trading signal from analysis results
    */
   private async createSignal(

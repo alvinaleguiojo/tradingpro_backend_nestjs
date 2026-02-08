@@ -5,6 +5,14 @@ import { Model } from 'mongoose';
 import axios, { AxiosInstance } from 'axios';
 import { Mt5Connection, Mt5ConnectionDocument } from '../../schemas/mt5-connection.schema';
 import { TradingLog, TradingLogDocument, TradingEventType } from '../../schemas/trading-log.schema';
+import { EaSession, EaSessionDocument } from '../../schemas/ea-session.schema';
+import {
+  EaCommand,
+  EaCommandDocument,
+  EaCommandType,
+  EaCommandSource,
+  EaCommandStatus,
+} from '../../schemas/ea-command.schema';
 
 export interface Mt5Quote {
   symbol: string;
@@ -79,13 +87,23 @@ export class Mt5Service implements OnModuleInit {
   private readonly TOKEN_VALIDATION_INTERVAL = 60000; // Revalidate token every 60s
   private currentTokenAccountId: string | null = null; // Track which account the current token belongs to
 
+  // EA Bridge mode — reads from EaSession cache instead of calling mtapi.io
+  private readonly eaBridgeEnabled: boolean;
+  private readonly eaCommandTtlSeconds: number;
+
   constructor(
     private configService: ConfigService,
     @InjectModel(Mt5Connection.name)
     private mt5ConnectionModel: Model<Mt5ConnectionDocument>,
     @InjectModel(TradingLog.name)
     private tradingLogModel: Model<TradingLogDocument>,
+    @InjectModel(EaSession.name)
+    private eaSessionModel: Model<EaSessionDocument>,
+    @InjectModel(EaCommand.name)
+    private eaCommandModel: Model<EaCommandDocument>,
   ) {
+    this.eaBridgeEnabled = this.configService.get('EA_BRIDGE_ENABLED', 'false') === 'true';
+    this.eaCommandTtlSeconds = parseInt(this.configService.get('EA_COMMAND_TTL_SECONDS', '60'), 10);
     this.baseUrl = this.configService.get('MT5_API_BASE_URL', 'https://mt5.mtapi.io');
     this.axiosClient = axios.create({
       baseURL: this.baseUrl,
@@ -93,11 +111,35 @@ export class Mt5Service implements OnModuleInit {
     });
   }
 
+  /**
+   * Check if EA Bridge mode is active
+   */
+  isEaBridgeMode(): boolean {
+    return this.eaBridgeEnabled;
+  }
+
+  /**
+   * Get the active EA session for the current account
+   */
+  private async getActiveEaSession(accountId?: string): Promise<EaSessionDocument | null> {
+    const id = accountId || this.currentTokenAccountId;
+    if (!id) {
+      // Fallback: get the most recently synced session
+      return this.eaSessionModel.findOne().sort({ lastSyncAt: -1 }).exec();
+    }
+    return this.eaSessionModel.findOne({ accountId: id }).exec();
+  }
+
   async onModuleInit() {
+    if (this.eaBridgeEnabled) {
+      this.logger.log('MT5 Service initialized in EA BRIDGE mode (mtapi.io disabled)');
+      return;
+    }
+
     // Load credentials from database on startup (don't block if it fails)
     try {
       await this.loadCredentialsFromDb();
-      this.logger.log('MT5 Service initialized');
+      this.logger.log('MT5 Service initialized (legacy mtapi.io mode)');
     } catch (error) {
       this.logger.warn('MT5 Service initialized (could not load credentials from DB)');
     }
@@ -173,8 +215,21 @@ export class Mt5Service implements OnModuleInit {
    * On serverless (Vercel), each request may be a new instance, so we always verify
    */
   async ensureAccountConnection(userId: string): Promise<boolean> {
+    // EA Bridge mode: just set the accountId, no mtapi.io connection needed
+    if (this.eaBridgeEnabled) {
+      this.currentTokenAccountId = userId;
+      this.token = 'ea-bridge-mode';
+      const session = await this.getActiveEaSession(userId);
+      if (session) {
+        this.logger.log(`EA Bridge: account ${userId} set (online: ${Date.now() - session.lastSyncAt.getTime() < 30000})`);
+        return true;
+      }
+      this.logger.warn(`EA Bridge: no session found for account ${userId}`);
+      return false;
+    }
+
     this.logger.log(`ensureAccountConnection called for user ${userId}, current: ${this.currentTokenAccountId}, hasToken: ${!!this.token}`);
-    
+
     // If already connected to this account with a valid token, we're good
     if (this.currentTokenAccountId === userId && this.token) {
       this.logger.log(`Already connected to account ${userId}`);
@@ -535,6 +590,15 @@ export class Mt5Service implements OnModuleInit {
   }
 
   async connect(): Promise<string> {
+    // EA Bridge mode: no mtapi.io connection needed
+    if (this.eaBridgeEnabled) {
+      const accountId = this.dynamicCredentials?.user || this.currentTokenAccountId;
+      this.logger.log(`EA Bridge mode: connect() is no-op for account ${accountId}`);
+      this.token = 'ea-bridge-mode';
+      if (accountId) this.currentTokenAccountId = accountId;
+      return 'ea-bridge-mode';
+    }
+
     const { user, password, host, port } = this.getCredentials();
 
     if (!user || !password || !host) {
@@ -618,19 +682,31 @@ export class Mt5Service implements OnModuleInit {
    * Use this when the token has expired
    */
   async forceReconnect(): Promise<string> {
+    // EA Bridge mode: no-op
+    if (this.eaBridgeEnabled) {
+      this.token = 'ea-bridge-mode';
+      return 'ea-bridge-mode';
+    }
+
     this.logger.log('Force reconnecting to MT5...');
-    
+
     // Try to load credentials from database first (for serverless)
     await this.loadCredentialsFromDb();
-    
+
     // Clear existing token
     this.token = null;
-    
+
     // Reconnect
     return this.connect();
   }
 
   async disconnect(): Promise<void> {
+    // EA Bridge mode: no-op
+    if (this.eaBridgeEnabled) {
+      this.token = null;
+      return;
+    }
+
     if (!this.token) return;
 
     try {
@@ -645,6 +721,14 @@ export class Mt5Service implements OnModuleInit {
   }
 
   async checkConnection(): Promise<boolean> {
+    // EA Bridge mode: check if EA session is online
+    if (this.eaBridgeEnabled) {
+      const session = await this.getActiveEaSession();
+      if (!session) return false;
+      const age = Date.now() - session.lastSyncAt.getTime();
+      return age < 30000; // Online if synced within 30s
+    }
+
     const now = Date.now();
     const currentAccount = this.dynamicCredentials?.user;
     
@@ -776,8 +860,26 @@ export class Mt5Service implements OnModuleInit {
   }
 
   async getAccountSummary(): Promise<Mt5AccountSummary | null> {
+    // EA Bridge mode: read from EaSession cache
+    if (this.eaBridgeEnabled) {
+      const session = await this.getActiveEaSession();
+      if (!session?.accountInfo) return null;
+      return {
+        balance: session.accountInfo.balance || 0,
+        equity: session.accountInfo.equity || 0,
+        freeMargin: session.accountInfo.freeMargin || 0,
+        margin: session.accountInfo.margin || 0,
+        marginLevel: session.accountInfo.equity && session.accountInfo.margin
+          ? (session.accountInfo.equity / session.accountInfo.margin) * 100
+          : 0,
+        profit: (session.openPositions || []).reduce((sum, p) => sum + (p.profit || 0), 0),
+        leverage: session.accountInfo.leverage || 0,
+        currency: session.accountInfo.currency || 'USD',
+      };
+    }
+
     await this.checkConnection();
-    
+
     try {
       const response = await this.axiosClient.get('/AccountSummary', {
         params: { id: this.token },
@@ -860,8 +962,21 @@ export class Mt5Service implements OnModuleInit {
   }
 
   async getQuote(symbol: string): Promise<Mt5Quote | null> {
+    // EA Bridge mode: read from EaSession cache
+    if (this.eaBridgeEnabled) {
+      const session = await this.getActiveEaSession();
+      if (!session?.lastQuote) return null;
+      return {
+        symbol: session.symbol || symbol,
+        bid: session.lastQuote.bid,
+        ask: session.lastQuote.ask,
+        time: session.lastQuote.time,
+        spread: Math.round((session.lastQuote.ask - session.lastQuote.bid) * 100) / 100,
+      };
+    }
+
     await this.checkConnection();
-    
+
     try {
       const response = await this.axiosClient.get('/GetQuote', {
         params: { id: this.token, symbol },
@@ -895,8 +1010,27 @@ export class Mt5Service implements OnModuleInit {
     timeframe: string,
     count: number = 100,
   ): Promise<Mt5Bar[]> {
+    // EA Bridge mode: read from EaSession candles cache
+    if (this.eaBridgeEnabled) {
+      const session = await this.getActiveEaSession();
+      if (!session?.candles || session.candles.length === 0) {
+        this.logger.warn(`EA Bridge: no candles available for ${symbol}`);
+        return [];
+      }
+      const bars: Mt5Bar[] = session.candles.map((c) => ({
+        time: c.time,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+        tickVolume: c.tickVolume || 0,
+      }));
+      this.logger.log(`EA Bridge: returning ${bars.length} cached candles for ${symbol}`);
+      return bars.slice(-count);
+    }
+
     await this.checkConnection();
-    
+
     // Debug: log token info
     const tokenPreview = this.token ? `${this.token.substring(0, 8)}...` : 'null';
     this.logger.log(`getPriceHistory called with token: ${tokenPreview} for ${symbol} ${timeframe}`);
@@ -1006,8 +1140,15 @@ export class Mt5Service implements OnModuleInit {
   }
 
   async isTradeSession(symbol: string): Promise<boolean> {
+    // EA Bridge mode: check if EA is online (if EA is running, market is open)
+    if (this.eaBridgeEnabled) {
+      const session = await this.getActiveEaSession();
+      if (!session) return false;
+      return Date.now() - session.lastSyncAt.getTime() < 30000;
+    }
+
     await this.checkConnection();
-    
+
     try {
       const response = await this.axiosClient.get('/IsTradeSession', {
         params: { id: this.token, symbol },
@@ -1020,8 +1161,26 @@ export class Mt5Service implements OnModuleInit {
   }
 
   async getOpenedOrders(): Promise<Mt5Order[]> {
+    // EA Bridge mode: read from EaSession positions cache
+    if (this.eaBridgeEnabled) {
+      const session = await this.getActiveEaSession();
+      if (!session?.openPositions) return [];
+      return session.openPositions.map((p) => ({
+        ticket: p.ticket,
+        symbol: p.symbol,
+        type: p.type,
+        volume: p.volume,
+        openPrice: p.openPrice,
+        stopLoss: p.stopLoss,
+        takeProfit: p.takeProfit,
+        profit: p.profit,
+        openTime: p.openTime,
+        comment: p.comment || '',
+      }));
+    }
+
     await this.checkConnection();
-    
+
     try {
       const response = await this.axiosClient.get('/OpenedOrders', {
         params: { id: this.token },
@@ -1064,6 +1223,45 @@ export class Mt5Service implements OnModuleInit {
     takeProfit?: number;
     comment?: string;
   }): Promise<OrderSendResult> {
+    // EA Bridge mode: create EaCommand for EA to execute locally
+    if (this.eaBridgeEnabled) {
+      const accountId = this.currentTokenAccountId;
+      if (!accountId) {
+        throw new Error('EA Bridge: no account set. Ensure ensureAccountConnection() was called.');
+      }
+
+      const expiresAt = new Date(Date.now() + this.eaCommandTtlSeconds * 1000);
+      const command = await this.eaCommandModel.create({
+        accountId,
+        type: params.type === 'BUY' ? EaCommandType.BUY : EaCommandType.SELL,
+        symbol: params.symbol,
+        volume: params.volume,
+        stopLoss: params.stopLoss || 0,
+        takeProfit: params.takeProfit || 0,
+        comment: params.comment || 'AutoTrading',
+        source: EaCommandSource.AUTO,
+        status: EaCommandStatus.PENDING,
+        expiresAt,
+      });
+
+      this.logger.log(`EA Bridge: ${params.type} command queued → ${(command as any)._id}`);
+
+      await this.log(
+        TradingEventType.TRADE_OPENED,
+        `EA Bridge: ${params.type} ${params.volume} ${params.symbol} command queued`,
+        { params, commandId: (command as any)._id.toString() },
+      );
+
+      return {
+        retcode: 0,
+        deal: '',
+        order: (command as any)._id.toString(),
+        volume: params.volume,
+        price: 0,
+        comment: `EA command queued: ${(command as any)._id}`,
+      };
+    }
+
     await this.checkConnection();
 
     // Map order type: 0 = BUY, 1 = SELL
@@ -1120,6 +1318,29 @@ export class Mt5Service implements OnModuleInit {
     stopLoss?: number;
     takeProfit?: number;
   }): Promise<boolean> {
+    // EA Bridge mode: create MODIFY command for EA
+    if (this.eaBridgeEnabled) {
+      const accountId = this.currentTokenAccountId;
+      if (!accountId) return false;
+
+      const expiresAt = new Date(Date.now() + this.eaCommandTtlSeconds * 1000);
+      await this.eaCommandModel.create({
+        accountId,
+        type: EaCommandType.MODIFY,
+        symbol: '',
+        ticket: params.ticket,
+        stopLoss: params.stopLoss || 0,
+        takeProfit: params.takeProfit || 0,
+        comment: `MODIFY_${params.ticket}`,
+        source: EaCommandSource.AUTO,
+        status: EaCommandStatus.PENDING,
+        expiresAt,
+      });
+
+      this.logger.log(`EA Bridge: MODIFY command queued for ticket #${params.ticket}`);
+      return true;
+    }
+
     await this.checkConnection();
 
     try {
@@ -1147,6 +1368,28 @@ export class Mt5Service implements OnModuleInit {
   }
 
   async closeOrder(ticket: string, volume?: number): Promise<boolean> {
+    // EA Bridge mode: create CLOSE command for EA
+    if (this.eaBridgeEnabled) {
+      const accountId = this.currentTokenAccountId;
+      if (!accountId) return false;
+
+      const expiresAt = new Date(Date.now() + this.eaCommandTtlSeconds * 1000);
+      await this.eaCommandModel.create({
+        accountId,
+        type: EaCommandType.CLOSE,
+        symbol: '',
+        ticket,
+        volume: volume || 0,
+        comment: `CLOSE_${ticket}`,
+        source: EaCommandSource.AUTO,
+        status: EaCommandStatus.PENDING,
+        expiresAt,
+      });
+
+      this.logger.log(`EA Bridge: CLOSE command queued for ticket #${ticket}`);
+      return true;
+    }
+
     await this.checkConnection();
 
     try {
