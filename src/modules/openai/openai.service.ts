@@ -46,23 +46,49 @@ export class OpenAiService {
 
     try {
       const prompt = this.buildAnalysisPrompt(ictAnalysis, recentCandles, currentPrice);
-      
-      const response = await this.openai.chat.completions.create({
-        model: 'gpt-4o',
-        messages: [
-          {
-            role: 'system',
-            content: this.getSystemPrompt(),
-          },
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-        temperature: 0.3, // Lower temperature for more consistent analysis
-        max_tokens: 1500,
-        response_format: { type: 'json_object' },
-      });
+
+      const configuredModel = this.configService.get<string>('OPENAI_MODEL') || 'gpt-5-chat-latest';
+      const modelCandidates = Array.from(new Set([
+        configuredModel,
+        'gpt-5',
+        'gpt-4o',
+      ]));
+
+      let response: any = null;
+      let lastError: any = null;
+
+      for (const model of modelCandidates) {
+        try {
+          response = await this.openai.chat.completions.create({
+            model,
+            messages: [
+              {
+                role: 'system',
+                content: this.getSystemPrompt(),
+              },
+              {
+                role: 'user',
+                content: prompt,
+              },
+            ],
+            temperature: 0.3, // Lower temperature for more consistent analysis
+            max_tokens: 1500,
+            response_format: { type: 'json_object' },
+          });
+          // Success, stop trying fallbacks
+          if (model !== configuredModel) {
+            this.logger.warn(`OpenAI fallback used: ${model} (primary: ${configuredModel})`);
+          }
+          break;
+        } catch (err) {
+          lastError = err;
+          this.logger.warn(`OpenAI model failed: ${model} - ${err.message}`);
+        }
+      }
+
+      if (!response) {
+        throw lastError || new Error('All OpenAI models failed');
+      }
 
       const content = response.choices[0]?.message?.content;
       
