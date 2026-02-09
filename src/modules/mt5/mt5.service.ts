@@ -590,12 +590,19 @@ export class Mt5Service implements OnModuleInit {
   }
 
   async connect(): Promise<string> {
-    // EA Bridge mode: no mtapi.io connection needed
+    // EA Bridge mode: no mtapi.io connection needed, just save credentials to DB
     if (this.eaBridgeEnabled) {
-      const accountId = this.dynamicCredentials?.user || this.currentTokenAccountId;
+      const creds = this.getCredentials();
+      const accountId = creds.user || this.currentTokenAccountId;
       this.logger.log(`EA Bridge mode: connect() is no-op for account ${accountId}`);
       this.token = 'ea-bridge-mode';
       if (accountId) this.currentTokenAccountId = accountId;
+
+      // Save credentials to database for serverless persistence
+      if (creds.user && creds.password && creds.host) {
+        await this.saveCredentialsToDb(creds.user, creds.password, creds.host, creds.port);
+      }
+
       return 'ea-bridge-mode';
     }
 
