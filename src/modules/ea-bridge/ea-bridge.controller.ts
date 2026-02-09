@@ -81,6 +81,14 @@ export class EaBridgeController {
     return { success: true, count: commands.length, data: commands };
   }
 
+  @Get('debug')
+  @ApiOperation({ summary: 'DEBUG: Get latest EA sessions and trades (remove after fixing)' })
+  async debug(@Query('limit') limit?: string) {
+    const parsedLimit = limit ? parseInt(limit, 10) : 20;
+    const data = await this.eaBridgeService.getDebugSnapshot(parsedLimit);
+    return { success: true, data };
+  }
+
   @Post('command/send')
   @ApiOperation({ summary: 'Send a manual trade command to EA' })
   async sendCommand(

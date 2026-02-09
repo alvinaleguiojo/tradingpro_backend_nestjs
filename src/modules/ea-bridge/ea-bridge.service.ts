@@ -43,6 +43,49 @@ export class EaBridgeService {
   }
 
   /**
+   * DEBUG ONLY: snapshot of latest EA sessions + trades (no auth, no filtering)
+   * Remove this once history issue is resolved.
+   */
+  async getDebugSnapshot(limit: number = 20) {
+    const sessions = await this.eaSessionModel
+      .find()
+      .sort({ lastSyncAt: -1 })
+      .limit(limit)
+      .exec();
+
+    const trades = await this.tradeModel
+      .find()
+      .sort({ openedAt: -1, closedAt: -1 })
+      .limit(limit)
+      .exec();
+
+    return {
+      sessions: sessions.map((s) => ({
+        accountId: s.accountId,
+        symbol: s.symbol,
+        isOnline: this.isSessionOnline(s),
+        lastSyncAt: s.lastSyncAt,
+        openPositions: s.openPositions?.length || 0,
+        balance: s.accountInfo?.balance,
+        equity: s.accountInfo?.equity,
+        eaVersion: s.eaVersion,
+      })),
+      trades: trades.map((t) => ({
+        accountId: t.accountId,
+        mt5Ticket: t.mt5Ticket,
+        symbol: t.symbol,
+        direction: t.direction,
+        status: t.status,
+        entryPrice: t.entryPrice,
+        exitPrice: t.exitPrice,
+        profit: t.profit,
+        openedAt: t.openedAt,
+        closedAt: t.closedAt,
+      })),
+    };
+  }
+
+  /**
    * Main sync handler — called every ~5 seconds by each EA
    */
   async handleSync(dto: EaSyncRequestDto) {
