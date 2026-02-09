@@ -171,6 +171,31 @@ export class TradingController {
     };
   }
 
+  @Get('trades/closed')
+  @ApiOperation({ summary: 'Get closed trades (DB-backed, paginated)' })
+  @ApiQuery({ name: 'accountId', required: false, description: 'MT5 account ID to filter by' })
+  @ApiQuery({ name: 'days', required: false, example: 30 })
+  @ApiQuery({ name: 'page', required: false, example: 1 })
+  @ApiQuery({ name: 'pageSize', required: false, example: 50 })
+  async getClosedTrades(
+    @Query('accountId') accountId?: string,
+    @Query('days') days: number = 30,
+    @Query('page') page: number = 1,
+    @Query('pageSize') pageSize: number = 50,
+  ) {
+    const result = await this.tradingService.getClosedTrades(accountId, days, page, pageSize);
+    return {
+      success: true,
+      data: result.data,
+      count: result.data.length,
+      total: result.total,
+      totalProfit: result.totalProfit,
+      page: result.page,
+      pageSize: result.pageSize,
+      totalPages: result.totalPages,
+    };
+  }
+
   @Get('signals')
   @ApiOperation({ summary: 'Get recent trading signals' })
   @ApiQuery({ name: 'limit', required: false, example: 20 })

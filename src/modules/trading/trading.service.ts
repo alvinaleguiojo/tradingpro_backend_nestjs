@@ -1183,6 +1183,60 @@ export class TradingService implements OnModuleInit {
   }
 
   /**
+   * Get closed trades - optionally filtered by accountId, with pagination
+   */
+  async getClosedTrades(
+    accountId?: string,
+    days: number = 30,
+    page: number = 1,
+    pageSize: number = 50,
+  ): Promise<{
+    data: TradeDocument[];
+    total: number;
+    totalProfit: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+  }> {
+    const query: any = { status: TradeStatus.CLOSED };
+    if (accountId) {
+      query.accountId = accountId;
+    }
+    if (days && days > 0) {
+      const since = new Date();
+      since.setDate(since.getDate() - days);
+      query.closedAt = { $gte: since };
+    }
+
+    const total = await this.tradeModel.countDocuments(query);
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const currentPage = Math.max(1, Math.min(page, totalPages));
+    const skip = (currentPage - 1) * pageSize;
+
+    const data = await this.tradeModel
+      .find(query)
+      .sort({ closedAt: -1 })
+      .skip(skip)
+      .limit(pageSize)
+      .exec();
+
+    const totalProfitAgg = await this.tradeModel.aggregate([
+      { $match: query },
+      { $group: { _id: null, totalProfit: { $sum: '$profit' } } },
+    ]);
+    const totalProfit = totalProfitAgg?.[0]?.totalProfit ?? 0;
+
+    return {
+      data,
+      total,
+      totalProfit: Math.round(totalProfit * 100) / 100,
+      page: currentPage,
+      pageSize,
+      totalPages,
+    };
+  }
+
+  /**
    * Get recent signals - optionally filtered by accountId
    */
   async getRecentSignals(limit: number = 20, accountId?: string): Promise<TradingSignalDocument[]> {
