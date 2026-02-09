@@ -43,15 +43,15 @@ const AGGRESSIVE_SCALPING_CONFIG: ScalpingConfig = {
   useAtrForSLTP: true,            // USE ATR for dynamic SL/TP
   atrPeriod: 14,                  // Standard 14-period ATR
   atrSlMultiplier: 1.2,           // SL = 1.2x ATR (protects against noise)
-  atrTpMultiplier: 1.8,           // TP = 1.8x ATR (1.5 R:R ratio)
+  atrTpMultiplier: 1.2,           // TP = 1.2x ATR (easier target for scalping)
   minSlPips: 15,                  // Minimum 15 pips SL (floor)
   maxSlPips: 50,                  // Maximum 50 pips SL (cap)
-  minTpPips: 20,                  // Minimum 20 pips TP
-  maxTpPips: 80,                  // Maximum 80 pips TP
+  minTpPips: 10,                  // Minimum 10 pips TP
+  maxTpPips: 50,                  // Maximum 50 pips TP
   
   // Fallback fixed pips (when ATR not available)
   stopLossPips: 25,               // Fallback 25 pip stop
-  takeProfitPips: 40,             // Fallback 40 pip TP
+  takeProfitPips: 25,             // Fallback 25 pip TP
   trailingStopPips: 15,           // Very tight trailing
   
   usePartialTakeProfit: true,
