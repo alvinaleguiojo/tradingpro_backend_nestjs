@@ -13,6 +13,7 @@ import {
 import { Trade, TradeDocument, TradeStatus } from '../../schemas/trade.schema';
 import { TradingLog, TradingLogDocument, TradingEventType } from '../../schemas/trading-log.schema';
 import { TradingService } from '../trading/trading.service';
+import { MoneyManagementService } from '../money-management/money-management.service';
 import { EaSyncRequestDto, EaSyncExecutionResultDto } from './dto/ea-sync.dto';
 
 @Injectable()
@@ -28,6 +29,7 @@ export class EaBridgeService {
     @InjectModel(Trade.name) private tradeModel: Model<TradeDocument>,
     @InjectModel(TradingLog.name) private logModel: Model<TradingLogDocument>,
     private tradingService: TradingService,
+    private moneyManagementService: MoneyManagementService,
     private configService: ConfigService,
   ) {
     this.analysisIntervalMs = parseInt(
@@ -336,7 +338,7 @@ export class EaBridgeService {
       if (signal && signal.signalType !== 'HOLD') {
         // Check max positions
         const openPositionCount = dto.positions?.length || 0;
-        const maxPositions = parseInt(this.configService.get('TRADING_MAX_POSITIONS', '2'), 10);
+        const maxPositions = parseInt(this.configService.get('TRADING_MAX_POSITIONS', '1'), 10);
 
         if (openPositionCount >= maxPositions) {
           this.logger.log(
@@ -379,14 +381,11 @@ export class EaBridgeService {
   }
 
   /**
-   * Get recommended lot size based on balance
+   * Get recommended lot size based on balance using 20-level money management table
    */
   private getRecommendedLotSize(balance?: number): number {
     if (!balance || balance < 100) return 0.01;
-    if (balance < 500) return 0.01;
-    if (balance < 1000) return 0.02;
-    if (balance < 5000) return 0.05;
-    return 0.1;
+    return this.moneyManagementService.getLotSizeForBalance(balance);
   }
 
   /**

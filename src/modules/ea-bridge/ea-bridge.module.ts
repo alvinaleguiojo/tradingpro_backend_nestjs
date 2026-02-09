@@ -7,6 +7,7 @@ import { EaCommand, EaCommandSchema } from '../../schemas/ea-command.schema';
 import { Trade, TradeSchema } from '../../schemas/trade.schema';
 import { TradingLog, TradingLogSchema } from '../../schemas/trading-log.schema';
 import { TradingModule } from '../trading/trading.module';
+import { MoneyManagementModule } from '../money-management/money-management.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { TradingModule } from '../trading/trading.module';
       { name: TradingLog.name, schema: TradingLogSchema },
     ]),
     forwardRef(() => TradingModule),
+    MoneyManagementModule,
   ],
   controllers: [EaBridgeController],
   providers: [EaBridgeService],
