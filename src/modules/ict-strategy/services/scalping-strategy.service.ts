@@ -108,6 +108,7 @@ export class ScalpingStrategyService {
     const last5 = candles.slice(-5);
     const last3 = candles.slice(-3);
     const last20 = candles.slice(-20);
+    const last10 = candles.slice(-10);
     
     // Calculate averages for momentum
     const avg5 = last5.reduce((sum, c) => sum + c.close, 0) / 5;
@@ -126,6 +127,50 @@ export class ScalpingStrategyService {
     
     // Position in range (0 = at low, 100 = at high)
     const positionInRange = range20 > 0 ? ((currentPrice - low20) / range20) * 100 : 50;
+
+    // ===== SHORT-TERM TREND (Score-based HH/HL vs LL/LH) =====
+    const trendLookback = 5;
+    let shortTermTrend: 'BULLISH' | 'BEARISH' | 'RANGING' = 'RANGING';
+    if (candles.length >= trendLookback + 1) {
+      const trendCandles = candles.slice(-(trendLookback + 1));
+      let higherHighs = 0;
+      let higherLows = 0;
+      let lowerHighs = 0;
+      let lowerLows = 0;
+      for (let i = 1; i < trendCandles.length; i++) {
+        const prev = trendCandles[i - 1];
+        const curr = trendCandles[i];
+        if (curr.high > prev.high) higherHighs++;
+        if (curr.low > prev.low) higherLows++;
+        if (curr.high < prev.high) lowerHighs++;
+        if (curr.low < prev.low) lowerLows++;
+      }
+      // Require majority of the last 5 transitions to be trending
+      if (higherHighs >= 3 && higherLows >= 3) shortTermTrend = 'BULLISH';
+      else if (lowerHighs >= 3 && lowerLows >= 3) shortTermTrend = 'BEARISH';
+    }
+    this.logger.log(`Short-term trend (score HH/HL): ${shortTermTrend}`);
+
+    // ===== STRUCTURE BREAK CHECK (allow counter-trend only on break) =====
+    const structureLookback = 10;
+    let structureBreakUp = false;
+    let structureBreakDown = false;
+    if (candles.length >= structureLookback + 1) {
+      const prior = candles.slice(-(structureLookback + 1), -1);
+      const swingHigh = Math.max(...prior.map(c => c.high));
+      const swingLow = Math.min(...prior.map(c => c.low));
+      structureBreakUp = lastCandle.close > swingHigh;
+      structureBreakDown = lastCandle.close < swingLow;
+      this.logger.log(`Structure levels: swingHigh=${swingHigh.toFixed(2)}, swingLow=${swingLow.toFixed(2)}, breakUp=${structureBreakUp}, breakDown=${structureBreakDown}`);
+    }
+
+    // ===== IMPULSE CANDLE FILTER =====
+    const avgRange5 = last5.reduce((sum, c) => sum + (c.high - c.low), 0) / last5.length;
+    const lastRange = lastCandle.high - lastCandle.low;
+    const prevRange = prevCandle.high - prevCandle.low;
+    const impulseMultiplier = 1.8;
+    const isImpulseLast = avgRange5 > 0 && lastRange >= avgRange5 * impulseMultiplier;
+    const isImpulsePrev = avgRange5 > 0 && prevRange >= avgRange5 * impulseMultiplier;
     
     this.logger.log(`📊 Price vs AVG3: ${priceVsAvg3.toFixed(3)}%, vs AVG5: ${priceVsAvg5.toFixed(3)}%, vs AVG20: ${priceVsAvg20.toFixed(3)}%`);
     this.logger.log(`📊 Position in 20-candle range: ${positionInRange.toFixed(1)}% (Low: ${low20.toFixed(2)}, High: ${high20.toFixed(2)})`);
@@ -245,8 +290,8 @@ export class ScalpingStrategyService {
     }
 
     // ===== SIGNAL 4: BREAKOUT DETECTION (Modified) =====
-    const recentHigh = Math.max(...candles.slice(-10).map(c => c.high));
-    const recentLow = Math.min(...candles.slice(-10).map(c => c.low));
+    const recentHigh = Math.max(...last10.map(c => c.high));
+    const recentLow = Math.min(...last10.map(c => c.low));
     const range = recentHigh - recentLow;
     
     // Only add breakout confluence if NOT overextended
@@ -286,6 +331,39 @@ export class ScalpingStrategyService {
     if (!direction) {
       this.logger.log(`⏸️ No clear direction - market is ranging`);
       return null;
+    }
+
+    // ===== APPLY SHORT-TERM TREND FILTER =====
+    if (direction === 'BUY' && shortTermTrend !== 'BULLISH') {
+      if (structureBreakUp) {
+        reasons.push('Counter-trend BUY allowed due to structure break');
+        confluences.push('Break above swing high');
+      } else {
+        this.logger.log(`Blocked BUY: short-term trend is ${shortTermTrend} without structure break`);
+        return null;
+      }
+    }
+    if (direction === 'SELL' && shortTermTrend !== 'BEARISH') {
+      if (structureBreakDown) {
+        reasons.push('Counter-trend SELL allowed due to structure break');
+        confluences.push('Break below swing low');
+      } else {
+        this.logger.log(`Blocked SELL: short-term trend is ${shortTermTrend} without structure break`);
+        return null;
+      }
+    }
+
+    // ===== AVOID ENTRIES AFTER IMPULSE CANDLES =====
+    if (isImpulseLast) {
+      this.logger.log(`Blocked entry: last candle is an impulse (range ${lastRange.toFixed(2)} vs avg ${avgRange5.toFixed(2)})`);
+      return null;
+    }
+    if (isImpulsePrev) {
+      const lastIsPullback = lastBullish !== prevBullish;
+      if (!lastIsPullback) {
+        this.logger.log(`Blocked entry: no pullback after impulse candle`);
+        return null;
+      }
     }
 
     // Log final decision
@@ -780,3 +858,6 @@ export class ScalpingStrategyService {
     }
   }
 }
+
+
+
