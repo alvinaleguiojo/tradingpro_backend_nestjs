@@ -60,6 +60,16 @@ export class TradingController {
       mt5Status = { isConnected: false, error: err.message };
     }
     
+    // Activation status (admin-activated MT5 account)
+    let activationRequired = false;
+    if (accountId) {
+      try {
+        activationRequired = !(await this.mt5Service.isAccountActivated(accountId));
+      } catch {
+        activationRequired = false;
+      }
+    }
+
     // Fetch remaining data in parallel with individual error handling
     const [
       tradingStatus,
@@ -111,6 +121,10 @@ export class TradingController {
         tradingStatus,
         scalpingStatus,
         mt5Status,
+        activationRequired,
+        activationMessage: activationRequired
+          ? 'Account not activated. Please contact admin to activate your account.'
+          : '',
         moneyManagementStatus,
         tradeStats,
         recentSignals,

@@ -169,14 +169,20 @@ export class Mt5Service implements OnModuleInit {
   /**
    * Save credentials to database (for serverless persistence)
    */
-  private async saveCredentialsToDb(user: string, password: string, host: string, port: string): Promise<void> {
+  private async saveCredentialsToDb(
+    user: string,
+    password: string,
+    host: string,
+    port: string,
+    serverName?: string,
+  ): Promise<void> {
     try {
       const connection = await this.mt5ConnectionModel.findOne({ user }).exec();
       
       if (connection) {
         await this.mt5ConnectionModel.updateOne(
           { user },
-          { password, host, port: parseInt(port, 10), updatedAt: new Date() }
+          { password, host, port: parseInt(port, 10), serverName, updatedAt: new Date() }
         );
       } else {
         const newConnection = new this.mt5ConnectionModel({
@@ -185,6 +191,7 @@ export class Mt5Service implements OnModuleInit {
           password,
           host,
           port: parseInt(port, 10),
+          serverName,
         });
         await newConnection.save();
       }
@@ -193,6 +200,55 @@ export class Mt5Service implements OnModuleInit {
     } catch (error) {
       this.logger.warn('Could not save credentials to database:', error.message);
     }
+  }
+
+  /**
+   * Get MT5 connection by account ID
+   */
+  async getConnectionByAccountId(accountId: string): Promise<Mt5ConnectionDocument | null> {
+    return this.mt5ConnectionModel.findOne({ user: accountId }).exec();
+  }
+
+  /**
+   * Save credentials with optional activation flag
+   */
+  async saveCredentials(
+    user: string,
+    password: string,
+    host: string,
+    port: string,
+    isConnected: boolean,
+    serverName?: string,
+  ): Promise<void> {
+    const existing = await this.mt5ConnectionModel.findOne({ user }).exec();
+    if (existing) {
+      (existing as any).password = password;
+      existing.host = host;
+      existing.port = parseInt(port, 10);
+      existing.isConnected = isConnected;
+      if (serverName) existing.serverName = serverName;
+      await existing.save();
+      return;
+    }
+
+    const connection = new this.mt5ConnectionModel({
+      accountId: user,
+      user,
+      password,
+      host,
+      port: parseInt(port, 10),
+      isConnected,
+      serverName,
+    });
+    await connection.save();
+  }
+
+  /**
+   * Check if account is activated (connected flag set by admin)
+   */
+  async isAccountActivated(accountId: string): Promise<boolean> {
+    const connection = await this.mt5ConnectionModel.findOne({ user: accountId }).exec();
+    return !!connection?.isConnected;
   }
 
   /**
@@ -600,7 +656,7 @@ export class Mt5Service implements OnModuleInit {
 
       // Save credentials to database for serverless persistence
       if (creds.user && creds.password && creds.host) {
-        await this.saveCredentialsToDb(creds.user, creds.password, creds.host, creds.port);
+        await this.saveCredentialsToDb(creds.user, creds.password, creds.host, creds.port, undefined);
       }
 
       return 'ea-bridge-mode';

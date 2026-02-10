@@ -233,24 +233,74 @@ export class Mt5Controller {
       password: string;
       host: string;
       port?: string;
+      serverName?: string;
     },
   ) {
-    await this.mt5Service.setCredentials(
-      body.user,
+    const accountId = body.user?.toString();
+    if (!accountId || !body.password || !body.host) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Missing login fields',
+      });
+    }
+
+    const existing = await this.mt5Service.getConnectionByAccountId(accountId);
+    if (!existing) {
+      // New account: save credentials and mark as not activated
+      await this.mt5Service.saveCredentials(
+        accountId,
+        body.password,
+        body.host,
+        body.port || '443',
+        false,
+        body.serverName,
+      );
+      return {
+        success: true,
+        connected: false,
+        activationRequired: true,
+        message: `Account ${accountId} saved. Please contact admin to activate.`,
+      };
+    }
+
+    if (existing.password && existing.password !== body.password) {
+      throw new BadRequestException({
+        success: false,
+        error: 'INVALID_PASSWORD',
+        message: 'Password does not match. Please check your credentials or contact admin.',
+      });
+    }
+
+    // Update stored credentials if host/port changed
+    await this.mt5Service.saveCredentials(
+      accountId,
       body.password,
       body.host,
       body.port || '443',
+      existing.isConnected,
+      body.serverName,
     );
-    // Try to connect with new credentials
-    try {
-      const token = await this.mt5Service.connect();
+
+    if (!existing.isConnected) {
       return {
         success: true,
-        message: `Connected to MT5 account ${body.user}`,
+        connected: false,
+        activationRequired: true,
+        message: `Account ${accountId} is not activated. Please contact admin.`,
+      };
+    }
+
+    // Activated account: proceed to connect (or EA bridge no-op)
+    await this.mt5Service.setCredentials(accountId, body.password, body.host, body.port || '443');
+    try {
+      await this.mt5Service.connect();
+      return {
+        success: true,
+        message: `Connected to MT5 account ${accountId}`,
         connected: true,
+        activationRequired: false,
       };
     } catch (error: any) {
-      // Throw HTTP 400 error for failed connection
       throw new BadRequestException({
         success: false,
         message: error.message || 'Failed to connect',
