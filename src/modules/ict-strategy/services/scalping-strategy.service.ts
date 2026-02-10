@@ -136,6 +136,8 @@ export class ScalpingStrategyService {
     const trendEnd = last20[last20.length - 1].close;
     const htfTrendPct = ((trendEnd - trendStart) / trendStart) * 100;
     const htfTrend = htfTrendPct > 0.1 ? 'BULLISH' : htfTrendPct < -0.1 ? 'BEARISH' : 'NEUTRAL';
+    // ===== RANGE FILTER (skip trades in ranging conditions) =====
+    const isRanging = htfTrend === 'NEUTRAL' && Math.abs(priceVsAvg20) < 0.2;
     this.logger.log(`📊 HTF Trend: ${htfTrend} (${htfTrendPct.toFixed(3)}%)`);
     
     // ===== OVEREXTENSION DETECTION =====
@@ -285,6 +287,11 @@ export class ScalpingStrategyService {
     // No direction determined
     if (!direction) {
       this.logger.log(`⏸️ No clear direction - market is ranging`);
+      return null;
+    }
+
+    if (isRanging) {
+      this.logger.log(`⏸️ Range filter: skipping trade in neutral HTF conditions`);
       return null;
     }
 
@@ -780,3 +787,4 @@ export class ScalpingStrategyService {
     }
   }
 }
+
