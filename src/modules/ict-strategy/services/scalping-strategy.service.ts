@@ -30,6 +30,14 @@ export interface ScalpingConfig {
   // Session settings
   onlyTradeDuringKillZones: boolean;
   allowCounterTrend: boolean;     // Allow trades against HTF trend
+
+  // Range filter settings
+  rangeFilterEnabled: boolean;     // Skip trades in ranging conditions
+  rangeAtrShortPeriod: number;     // Short ATR period for compression
+  rangeAtrLongPeriod: number;      // Long ATR period baseline
+  rangeAtrCompressionThreshold: number; // Short/Long ATR ratio below this = compression
+  rangeMaxRangePct: number;        // Max 20-candle range as % of price to be considered ranging
+  rangePriceVsAvg20Max: number;    // Max deviation from AVG20 (%) for ranging
 }
 
 // ULTRA AGGRESSIVE scalping defaults for XAU/USD
@@ -60,6 +68,14 @@ const AGGRESSIVE_SCALPING_CONFIG: ScalpingConfig = {
   
   onlyTradeDuringKillZones: false, // Trade any time for scalping
   allowCounterTrend: true,         // ALLOW counter-trend for more trades
+
+  // Range filter defaults (XAU/USD tuned)
+  rangeFilterEnabled: true,
+  rangeAtrShortPeriod: 14,
+  rangeAtrLongPeriod: 50,
+  rangeAtrCompressionThreshold: 0.7, // Short ATR < 70% of long ATR
+  rangeMaxRangePct: 0.5,             // 20-candle range < 0.5% of price
+  rangePriceVsAvg20Max: 0.25,        // Price within 0.25% of AVG20
 };
 
 @Injectable()
@@ -137,8 +153,18 @@ export class ScalpingStrategyService {
     const htfTrendPct = ((trendEnd - trendStart) / trendStart) * 100;
     const htfTrend = htfTrendPct > 0.1 ? 'BULLISH' : htfTrendPct < -0.1 ? 'BEARISH' : 'NEUTRAL';
     // ===== RANGE FILTER (skip trades in ranging conditions) =====
-    const isRanging = htfTrend === 'NEUTRAL' && Math.abs(priceVsAvg20) < 0.2;
+    const rangePct = avg20 !== 0 ? (range20 / avg20) * 100 : 100;
+    const hasLongAtr = candles.length >= this.config.rangeAtrLongPeriod + 1;
+    const atrShort = this.calculateATR(candles, this.config.rangeAtrShortPeriod);
+    const atrLong = this.calculateATR(candles, this.config.rangeAtrLongPeriod);
+    const atrCompression = hasLongAtr && atrLong > 0 ? atrShort / atrLong : 1;
+    const isRanging = this.config.rangeFilterEnabled &&
+      htfTrend === 'NEUTRAL' &&
+      Math.abs(priceVsAvg20) < this.config.rangePriceVsAvg20Max &&
+      rangePct < this.config.rangeMaxRangePct &&
+      atrCompression < this.config.rangeAtrCompressionThreshold;
     this.logger.log(`📊 HTF Trend: ${htfTrend} (${htfTrendPct.toFixed(3)}%)`);
+    this.logger.log(`📊 Range check: range=${rangePct.toFixed(3)}%, ATR short/long=${atrCompression.toFixed(2)}, priceVsAvg20=${priceVsAvg20.toFixed(3)}%`);
     
     // ===== OVEREXTENSION DETECTION =====
     // More strict thresholds to reduce false reversals
