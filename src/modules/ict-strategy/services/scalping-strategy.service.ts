@@ -88,6 +88,7 @@ const AGGRESSIVE_SCALPING_CONFIG: ScalpingConfig = {
 @Injectable()
 export class ScalpingStrategyService {
   private readonly logger = new Logger('ScalpingStrategy');
+  private readonly XAU_PIP_VALUE = 0.1;
   private config: ScalpingConfig = AGGRESSIVE_SCALPING_CONFIG;
 
   /**
@@ -350,7 +351,7 @@ export class ScalpingStrategyService {
     }
 
     // Calculate ATR-based or fixed SL/TP
-    const pipValue = 0.20; // For Gold (1 pip = $0.20)
+    const pipValue = this.getPipValue();
     
     let slPips: number;
     let tpPips: number;
@@ -388,6 +389,11 @@ export class ScalpingStrategyService {
     const risk = Math.abs(currentPrice - stopLoss);
     const reward = Math.abs(takeProfit - currentPrice);
     const riskRewardRatio = reward / risk;
+
+    if (riskRewardRatio < this.config.minRiskReward) {
+      this.logger.log(`Trend setup R:R too low: ${riskRewardRatio.toFixed(2)} < ${this.config.minRiskReward}`);
+      return null;
+    }
 
     // Add metadata
     confluences.push(`R:R ${riskRewardRatio.toFixed(2)}`);
@@ -453,7 +459,7 @@ export class ScalpingStrategyService {
     const midpoint = (rangeHigh + rangeLow) / 2;
     const edgeBuffer = Math.max(rangeSize * this.config.rangeEdgeBufferPercent, atr * 0.5);
     const breakoutBuffer = atr * this.config.rangeBreakoutAtrMultiplier;
-    const spreadInPrice = spreadPips * 0.2; // XAUUSD pip approximation
+    const spreadInPrice = spreadPips * this.getPipValue();
 
     // Breakout guard: avoid fading after range breaks.
     if (currentPrice > rangeHigh + breakoutBuffer || currentPrice < rangeLow - breakoutBuffer) {
@@ -972,7 +978,7 @@ export class ScalpingStrategyService {
    * Get break-even price for position management
    */
   getBreakEvenPrice(entryPrice: number, direction: 'BUY' | 'SELL'): number {
-    const pipValue = 0.1;
+    const pipValue = this.getPipValue();
     if (direction === 'BUY') {
       return entryPrice + (this.config.breakEvenAtProfit * pipValue);
     } else {
@@ -984,7 +990,7 @@ export class ScalpingStrategyService {
    * Get trailing stop price
    */
   getTrailingStopPrice(currentPrice: number, direction: 'BUY' | 'SELL'): number {
-    const pipValue = 0.1;
+    const pipValue = this.getPipValue();
     if (direction === 'BUY') {
       return currentPrice - (this.config.trailingStopPips * pipValue);
     } else {
@@ -1002,6 +1008,10 @@ export class ScalpingStrategyService {
     } else {
       return entryPrice - risk;
     }
+  }
+
+  private getPipValue(): number {
+    return this.XAU_PIP_VALUE;
   }
 }
 

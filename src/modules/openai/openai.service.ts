@@ -17,6 +17,12 @@ export interface AiTradeRecommendation {
   warnings: string[];
 }
 
+export interface AiAnalysisOptions {
+  mode?: 'SCALPING' | 'STANDARD';
+  minRiskReward?: number;
+  minConfidence?: number;
+}
+
 @Injectable()
 export class OpenAiService {
   private readonly logger = new Logger(OpenAiService.name);
@@ -32,6 +38,10 @@ export class OpenAiService {
     }
   }
 
+  isAvailable(): boolean {
+    return !!this.openai;
+  }
+
   /**
    * Analyze market data and ICT analysis using GPT-4
    */
@@ -39,13 +49,21 @@ export class OpenAiService {
     ictAnalysis: IctAnalysisResult,
     recentCandles: { open: number; high: number; low: number; close: number; time: string | Date }[],
     currentPrice: number,
+    options: AiAnalysisOptions = {},
   ): Promise<AiTradeRecommendation> {
     if (!this.openai) {
       return this.getDefaultRecommendation('OpenAI not configured');
     }
 
     try {
-      const prompt = this.buildAnalysisPrompt(ictAnalysis, recentCandles, currentPrice);
+      const mode = options.mode || 'STANDARD';
+      const minRiskReward = options.minRiskReward ?? 1.5;
+      const minConfidence = options.minConfidence ?? 50;
+      const prompt = this.buildAnalysisPrompt(ictAnalysis, recentCandles, currentPrice, {
+        mode,
+        minRiskReward,
+        minConfidence,
+      });
 
       const configuredModel = this.configService.get<string>('OPENAI_MODEL') || 'gpt-5-chat-latest';
       const modelCandidates = Array.from(new Set([
@@ -62,10 +80,14 @@ export class OpenAiService {
           response = await this.openai.chat.completions.create({
             model,
             messages: [
-              {
-                role: 'system',
-                content: this.getSystemPrompt(),
-              },
+                {
+                  role: 'system',
+                  content: this.getSystemPrompt({
+                    mode,
+                    minRiskReward,
+                    minConfidence,
+                  }),
+                },
               {
                 role: 'user',
                 content: prompt,
@@ -99,7 +121,11 @@ export class OpenAiService {
       const recommendation = JSON.parse(content) as AiTradeRecommendation;
       
       // Validate and sanitize the recommendation
-      return this.validateRecommendation(recommendation, currentPrice);
+      return this.validateRecommendation(recommendation, currentPrice, {
+        mode,
+        minRiskReward,
+        minConfidence,
+      });
       
     } catch (error) {
       this.logger.error('OpenAI analysis failed', error);
@@ -110,7 +136,7 @@ export class OpenAiService {
   /**
    * Get system prompt for the trading AI
    */
-  private getSystemPrompt(): string {
+  private getSystemPrompt(options: Required<AiAnalysisOptions>): string {
     return `You are an expert forex and commodities trader specializing in ICT (Inner Circle Trader) concepts for trading Gold (XAU/USD).
 
 Your expertise includes:
@@ -125,15 +151,21 @@ You must analyze the provided market data and ICT analysis to give a trading rec
 
 CRITICAL RULES:
 1. Only recommend trades with at least 2 confluences
-2. Minimum risk-reward ratio of 1.5:1
+2. Minimum risk-reward ratio of at least ${options.minRiskReward}:1
 3. **RESPECT THE HIGHER TIMEFRAME TREND** - If the overall trend is BEARISH (lower highs, lower lows in price action), prefer SELL trades. If BULLISH, prefer BUY trades.
 4. **DO NOT keep recommending BUY during downtrends** - A single bullish candle in a downtrend is NOT a reversal
-5. Prefer trades during Kill Zones (London/NY sessions)
+5. Prefer trades during Kill Zones (London/NY sessions), but if mode is SCALPING do not reject valid setups solely because they are outside kill zones
 6. Be conservative - when in doubt, recommend HOLD
 7. Account for Gold's average daily range (typically $20-40)
 8. **BALANCED ANALYSIS** - Consider both bullish AND bearish scenarios equally. Do not have a bias toward one direction.
 9. For a valid reversal, require: Change of Character (CHoCH) or Break of Structure (BoS) in the opposite direction
 10. "Oversold" alone is NOT a buy signal - markets can stay oversold during strong downtrends
+11. Minimum confidence to mark shouldTrade=true is ${options.minConfidence}%
+
+MODE:
+- Current mode is ${options.mode}.
+- If mode is SCALPING: prioritize short-horizon M5 execution quality, quick invalidation, and realistic targets.
+- If mode is STANDARD: prioritize higher-quality swing setups and stronger confirmation.
 
 REVERSAL REQUIREMENTS (must have AT LEAST 2):
 - Change of Character (CHoCH) on the timeframe
@@ -165,6 +197,7 @@ Respond with a JSON object containing:
     ictAnalysis: IctAnalysisResult,
     recentCandles: { open: number; high: number; low: number; close: number; time: string | Date }[],
     currentPrice: number,
+    options: Required<AiAnalysisOptions>,
   ): string {
     const last10Candles = recentCandles.slice(-10);
     
@@ -172,6 +205,10 @@ Respond with a JSON object containing:
 Analyze the following Gold (${ictAnalysis.symbol}) market data on the ${ictAnalysis.timeframe} timeframe:
 
 CURRENT PRICE: ${currentPrice}
+MODE: ${options.mode}
+CONSTRAINTS:
+- Minimum Risk/Reward: ${options.minRiskReward}:1
+- Minimum Trade Confidence: ${options.minConfidence}%
 
 MARKET STRUCTURE:
 - Trend: ${ictAnalysis.marketStructure.trend}
@@ -233,6 +270,7 @@ Consider the ICT concepts carefully and only recommend a trade if there are stro
   private validateRecommendation(
     recommendation: AiTradeRecommendation,
     currentPrice: number,
+    options: Required<AiAnalysisOptions>,
   ): AiTradeRecommendation {
     // Ensure all required fields exist
     const validated: AiTradeRecommendation = {
@@ -272,16 +310,16 @@ Consider the ICT concepts carefully and only recommend a trade if there are stro
       const reward = Math.abs(validated.takeProfit - validated.entryPrice);
       const rr = reward / risk;
 
-      if (rr < 1.5) {
+      if (rr < options.minRiskReward) {
         validated.shouldTrade = false;
-        validated.warnings.push('Risk-reward ratio below minimum threshold of 1.5');
+        validated.warnings.push(`Risk-reward ratio below minimum threshold of ${options.minRiskReward}`);
       }
     }
 
     // Don't trade with low confidence
-    if (validated.confidence < 50 && validated.shouldTrade) {
+    if (validated.confidence < options.minConfidence && validated.shouldTrade) {
       validated.shouldTrade = false;
-      validated.warnings.push('Confidence too low for trade execution');
+      validated.warnings.push(`Confidence too low for trade execution (min ${options.minConfidence})`);
     }
 
     return validated;
