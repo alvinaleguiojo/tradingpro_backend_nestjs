@@ -379,7 +379,7 @@ export class TradingService implements OnModuleInit {
           `SCALP signal: ${signal.signalType} with ${signal.confidence}% confidence (ICT only)`,
           { 
             signalId: (signal as any)._id?.toString(),
-            mode: 'SCALPING_AI_CONFIRMED',
+            mode: 'SCALPING',
             reasons: scalpSetup.reasons,
             confluences: scalpSetup.confluences,
           },
