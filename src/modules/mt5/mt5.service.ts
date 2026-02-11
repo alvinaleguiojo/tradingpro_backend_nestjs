@@ -102,12 +102,12 @@ export class Mt5Service implements OnModuleInit {
     @InjectModel(EaCommand.name)
     private eaCommandModel: Model<EaCommandDocument>,
   ) {
-    // Force EA Bridge mode (mtapi.io disabled)
+    // Force EA Bridge mode for trading/analysis (mtapi.io connect disabled)
     this.eaBridgeEnabled = true;
     this.eaCommandTtlSeconds = parseInt(this.configService.get('EA_COMMAND_TTL_SECONDS', '60'), 10);
-    this.baseUrl = this.configService.get('MT5_API_BASE_URL', '');
+    this.baseUrl = this.configService.get('MT5_API_BASE_URL', 'https://mt5.mtapi.io');
     this.axiosClient = axios.create({
-      baseURL: this.baseUrl || 'http://localhost/disabled',
+      baseURL: this.baseUrl,
       timeout: this.REQUEST_TIMEOUT,
     });
   }
@@ -1797,9 +1797,6 @@ export class Mt5Service implements OnModuleInit {
    * Search for brokers by company name
    */
   async searchBrokers(companyName: string): Promise<any[]> {
-    if (this.eaBridgeEnabled) {
-      return [];
-    }
     try {
       const response = await this.axiosClient.get('/Search', {
         params: { company: companyName },
