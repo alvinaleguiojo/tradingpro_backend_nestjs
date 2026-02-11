@@ -49,6 +49,8 @@ export class TradingSignal {
   @Prop({ type: Object })
   ictAnalysis: {
     marketStructure: string;
+    regime?: string;
+    regimeReason?: string;
     orderBlocks: any[];
     fairValueGaps: any[];
     liquidityLevels: any[];
@@ -75,3 +77,4 @@ export const TradingSignalSchema = SchemaFactory.createForClass(TradingSignal);
 // Compound indexes
 TradingSignalSchema.index({ symbol: 1, createdAt: -1 });
 TradingSignalSchema.index({ signalType: 1, strength: 1 });
+TradingSignalSchema.index({ 'ictAnalysis.regime': 1, createdAt: -1 });

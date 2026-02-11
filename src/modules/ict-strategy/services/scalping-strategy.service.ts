@@ -31,6 +31,17 @@ export interface ScalpingConfig {
   onlyTradeDuringKillZones: boolean;
   allowCounterTrend: boolean;     // Allow trades against HTF trend
 
+  // Regime detection and range logic
+  useRegimeSwitching: boolean;
+  adxPeriod: number;
+  adxRangeThreshold: number;
+  adxTrendThreshold: number;
+  rangeLookbackCandles: number;
+  rangeEdgeBufferPercent: number;
+  rangeBreakoutAtrMultiplier: number;
+  rangeStopAtrMultiplier: number;
+  minRangeWidthAtrMultiplier: number;
+
 }
 
 // ULTRA AGGRESSIVE scalping defaults for XAU/USD
@@ -61,6 +72,15 @@ const AGGRESSIVE_SCALPING_CONFIG: ScalpingConfig = {
   
   onlyTradeDuringKillZones: false, // Trade any time for scalping
   allowCounterTrend: true,         // ALLOW counter-trend for more trades
+  useRegimeSwitching: true,
+  adxPeriod: 14,
+  adxRangeThreshold: 20,
+  adxTrendThreshold: 25,
+  rangeLookbackCandles: 30,
+  rangeEdgeBufferPercent: 0.18,
+  rangeBreakoutAtrMultiplier: 0.8,
+  rangeStopAtrMultiplier: 0.8,
+  minRangeWidthAtrMultiplier: 2.0,
 };
 
 @Injectable()
@@ -128,6 +148,35 @@ export class ScalpingStrategyService {
     // Position in range (0 = at low, 100 = at high)
     const positionInRange = range20 > 0 ? ((currentPrice - low20) / range20) * 100 : 50;
     
+    // ===== REGIME SWITCHING (TREND vs RANGE) =====
+    if (this.config.useRegimeSwitching) {
+      const atr = this.calculateATR(candles, this.config.atrPeriod);
+      const regime = this.detectMarketRegime(candles);
+      this.logger.log(`Regime: ${regime.regime} (ADX ${regime.adx.toFixed(1)})`);
+
+      if (regime.regime === 'RANGE') {
+        const rangeSetup = this.buildRangeMeanReversionSetup(
+          candles,
+          currentPrice,
+          spread,
+          atr,
+          regime.adx,
+        );
+
+        if (!rangeSetup) {
+          this.logger.log(`Range regime detected, but no edge setup. Skipping trade.`);
+          return null;
+        }
+
+        return rangeSetup;
+      }
+
+      if (regime.regime === 'TRANSITION') {
+        this.logger.log(`ADX transition zone detected. Skipping to avoid whipsaw.`);
+        return null;
+      }
+    }
+    
     this.logger.log(`📊 Price vs AVG3: ${priceVsAvg3.toFixed(3)}%, vs AVG5: ${priceVsAvg5.toFixed(3)}%, vs AVG20: ${priceVsAvg20.toFixed(3)}%`);
     this.logger.log(`📊 Position in 20-candle range: ${positionInRange.toFixed(1)}% (Low: ${low20.toFixed(2)}, High: ${high20.toFixed(2)})`);
 
@@ -137,8 +186,6 @@ export class ScalpingStrategyService {
     const trendEnd = last20[last20.length - 1].close;
     const htfTrendPct = ((trendEnd - trendStart) / trendStart) * 100;
     const htfTrend = htfTrendPct > 0.1 ? 'BULLISH' : htfTrendPct < -0.1 ? 'BEARISH' : 'NEUTRAL';
-    // ===== RANGE FILTER (skip trades in ranging conditions) =====
-    const isRanging = htfTrend === 'NEUTRAL' && Math.abs(priceVsAvg20) < 0.2;
     this.logger.log(`📊 HTF Trend: ${htfTrend} (${htfTrendPct.toFixed(3)}%)`);
     
     // ===== OVEREXTENSION DETECTION =====
@@ -291,11 +338,6 @@ export class ScalpingStrategyService {
       return null;
     }
 
-    if (isRanging) {
-      this.logger.log(`⏸️ Range filter: skipping trade in neutral HTF conditions`);
-      return null;
-    }
-
     // Log final decision
     this.logger.log(`🎯 Direction: ${direction}, Confidence: ${confidence}%, Reasons: ${reasons.join(', ')}`);
 
@@ -358,6 +400,178 @@ export class ScalpingStrategyService {
       reasons,
       confluences,
     };
+  }
+
+  private detectMarketRegime(
+    candles: Candle[],
+  ): { regime: 'RANGE' | 'TREND' | 'TRANSITION'; adx: number } {
+    const adx = this.calculateADX(candles, this.config.adxPeriod);
+
+    if (adx === null) {
+      return { regime: 'TRANSITION', adx: 0 };
+    }
+
+    if (adx < this.config.adxRangeThreshold) {
+      return { regime: 'RANGE', adx };
+    }
+
+    if (adx > this.config.adxTrendThreshold) {
+      return { regime: 'TREND', adx };
+    }
+
+    return { regime: 'TRANSITION', adx };
+  }
+
+  private buildRangeMeanReversionSetup(
+    candles: Candle[],
+    currentPrice: number,
+    spreadPips: number,
+    atr: number,
+    adx: number,
+  ): TradeSetup | null {
+    const lookback = this.config.rangeLookbackCandles;
+    if (candles.length < lookback) {
+      return null;
+    }
+
+    const window = candles.slice(-lookback);
+    const rangeHigh = Math.max(...window.map((c) => c.high));
+    const rangeLow = Math.min(...window.map((c) => c.low));
+    const rangeSize = rangeHigh - rangeLow;
+    if (rangeSize <= 0) {
+      return null;
+    }
+
+    const minRangeWidth = atr * this.config.minRangeWidthAtrMultiplier;
+    if (rangeSize < minRangeWidth) {
+      this.logger.log(`Range too narrow: ${rangeSize.toFixed(2)} < ${minRangeWidth.toFixed(2)} (min)`);
+      return null;
+    }
+
+    const midpoint = (rangeHigh + rangeLow) / 2;
+    const edgeBuffer = Math.max(rangeSize * this.config.rangeEdgeBufferPercent, atr * 0.5);
+    const breakoutBuffer = atr * this.config.rangeBreakoutAtrMultiplier;
+    const spreadInPrice = spreadPips * 0.2; // XAUUSD pip approximation
+
+    // Breakout guard: avoid fading after range breaks.
+    if (currentPrice > rangeHigh + breakoutBuffer || currentPrice < rangeLow - breakoutBuffer) {
+      this.logger.log(
+        `Breakout guard triggered (price=${currentPrice.toFixed(2)}, range=${rangeLow.toFixed(2)}-${rangeHigh.toFixed(2)})`,
+      );
+      return null;
+    }
+
+    let direction: 'BUY' | 'SELL' | null = null;
+    if (currentPrice <= rangeLow + edgeBuffer) {
+      direction = 'BUY';
+    } else if (currentPrice >= rangeHigh - edgeBuffer) {
+      direction = 'SELL';
+    } else {
+      return null;
+    }
+
+    const stopOffset = Math.max(atr * this.config.rangeStopAtrMultiplier, spreadInPrice * 1.5);
+    const stopLoss = direction === 'BUY' ? rangeLow - stopOffset : rangeHigh + stopOffset;
+    const takeProfit = midpoint;
+
+    const risk = Math.abs(currentPrice - stopLoss);
+    const reward = Math.abs(takeProfit - currentPrice);
+    if (risk <= 0 || reward <= 0) {
+      return null;
+    }
+
+    const riskRewardRatio = reward / risk;
+    if (riskRewardRatio < this.config.minRiskReward) {
+      this.logger.log(`Range setup R:R too low: ${riskRewardRatio.toFixed(2)} < ${this.config.minRiskReward}`);
+      return null;
+    }
+
+    const edgeDistance = direction === 'BUY' ? currentPrice - rangeLow : rangeHigh - currentPrice;
+    const edgeScore = Math.max(0, Math.min(1, 1 - edgeDistance / edgeBuffer));
+    const adxBonus = Math.max(0, this.config.adxRangeThreshold - adx) * 0.6;
+    const confidence = Math.min(85, Math.round((45 + edgeScore * 30 + adxBonus) * 10) / 10);
+
+    return {
+      direction,
+      entryPrice: currentPrice,
+      stopLoss,
+      takeProfit,
+      riskRewardRatio: Math.round(riskRewardRatio * 100) / 100,
+      confidence,
+      reasons: [
+        `Ranging regime detected (ADX ${adx.toFixed(1)})`,
+        `${direction} from ${direction === 'BUY' ? 'range low' : 'range high'} edge`,
+        'Targeting range midpoint reversion',
+      ],
+      confluences: [
+        `Range ${rangeLow.toFixed(2)} - ${rangeHigh.toFixed(2)}`,
+        `Edge buffer ${edgeBuffer.toFixed(2)}`,
+        `ATR ${atr.toFixed(2)}`,
+        `R:R ${riskRewardRatio.toFixed(2)}`,
+      ],
+    };
+  }
+
+  private calculateADX(candles: Candle[], period: number = 14): number | null {
+    if (candles.length < period * 2 + 2) {
+      return null;
+    }
+
+    const trValues: number[] = [];
+    const plusDmValues: number[] = [];
+    const minusDmValues: number[] = [];
+
+    for (let i = 1; i < candles.length; i++) {
+      const current = candles[i];
+      const previous = candles[i - 1];
+
+      const upMove = current.high - previous.high;
+      const downMove = previous.low - current.low;
+      const plusDM = upMove > downMove && upMove > 0 ? upMove : 0;
+      const minusDM = downMove > upMove && downMove > 0 ? downMove : 0;
+
+      const tr = Math.max(
+        current.high - current.low,
+        Math.abs(current.high - previous.close),
+        Math.abs(current.low - previous.close),
+      );
+
+      trValues.push(tr);
+      plusDmValues.push(plusDM);
+      minusDmValues.push(minusDM);
+    }
+
+    if (trValues.length < period + 1) {
+      return null;
+    }
+
+    let smoothedTR = trValues.slice(0, period).reduce((sum, v) => sum + v, 0);
+    let smoothedPlusDM = plusDmValues.slice(0, period).reduce((sum, v) => sum + v, 0);
+    let smoothedMinusDM = minusDmValues.slice(0, period).reduce((sum, v) => sum + v, 0);
+    const dxValues: number[] = [];
+
+    for (let i = period; i < trValues.length; i++) {
+      smoothedTR = smoothedTR - smoothedTR / period + trValues[i];
+      smoothedPlusDM = smoothedPlusDM - smoothedPlusDM / period + plusDmValues[i];
+      smoothedMinusDM = smoothedMinusDM - smoothedMinusDM / period + minusDmValues[i];
+
+      if (smoothedTR <= 0) {
+        continue;
+      }
+
+      const plusDI = (100 * smoothedPlusDM) / smoothedTR;
+      const minusDI = (100 * smoothedMinusDM) / smoothedTR;
+      const diSum = plusDI + minusDI;
+      const dx = diSum === 0 ? 0 : (100 * Math.abs(plusDI - minusDI)) / diSum;
+      dxValues.push(dx);
+    }
+
+    if (dxValues.length < period) {
+      return null;
+    }
+
+    const recentDx = dxValues.slice(-period);
+    return recentDx.reduce((sum, v) => sum + v, 0) / recentDx.length;
   }
 
   /**

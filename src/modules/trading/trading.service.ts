@@ -585,6 +585,31 @@ export class TradingService implements OnModuleInit {
   }
 
   /**
+   * Build regime telemetry from scalping setup text signals.
+   */
+  private getScalpingRegimeTelemetry(
+    scalpSetup: TradeSetup,
+  ): { regime: string; regimeReason: string } {
+    const reasons = scalpSetup.reasons || [];
+    const confluences = scalpSetup.confluences || [];
+    const rangeReason =
+      reasons.find((r) => /ranging regime|range/i.test(r)) ||
+      confluences.find((c) => /range/i.test(c));
+
+    if (rangeReason) {
+      return { regime: 'RANGE', regimeReason: rangeReason };
+    }
+
+    const trendReason =
+      reasons.find((r) => /momentum|break|trend|engulfing|reversal/i.test(r)) ||
+      reasons[0] ||
+      confluences[0] ||
+      'Trend-following scalping conditions';
+
+    return { regime: 'TREND', regimeReason: trendReason };
+  }
+
+  /**
    * Create scalping signal with explicit accountId (for EA bridge)
    */
   private async createScalpingSignalForAccount(
@@ -596,6 +621,7 @@ export class TradingService implements OnModuleInit {
     aiRecommendation?: AiTradeRecommendation,
   ): Promise<TradingSignalDocument> {
     const signalType = scalpSetup.direction === 'BUY' ? SignalType.BUY : SignalType.SELL;
+    const regimeTelemetry = this.getScalpingRegimeTelemetry(scalpSetup);
 
     let strength: SignalStrength;
     if (scalpSetup.confidence >= 70) strength = SignalStrength.VERY_STRONG;
@@ -638,6 +664,8 @@ export class TradingService implements OnModuleInit {
       confidence: scalpSetup.confidence,
       ictAnalysis: {
         marketStructure: aiRecommendation ? 'SCALPING_AI_CONFIRMED' : 'SCALPING_EA',
+        regime: regimeTelemetry.regime,
+        regimeReason: regimeTelemetry.regimeReason,
         orderBlocks: [],
         fairValueGaps: [],
         liquidityLevels: [],
@@ -706,6 +734,8 @@ export class TradingService implements OnModuleInit {
       confidence,
       ictAnalysis: {
         marketStructure: ictAnalysis.marketStructure.trend,
+        regime: ictAnalysis.marketStructure.trend,
+        regimeReason: `ICT market structure trend is ${ictAnalysis.marketStructure.trend}`,
         orderBlocks: ictAnalysis.orderBlocks.filter((ob) => ob.valid).slice(0, 5),
         fairValueGaps: ictAnalysis.unfilledFVGs.slice(0, 5),
         liquidityLevels: [...ictAnalysis.buyLiquidity.slice(0, 3), ...ictAnalysis.sellLiquidity.slice(0, 3)],
@@ -778,6 +808,8 @@ export class TradingService implements OnModuleInit {
       confidence,
       ictAnalysis: {
         marketStructure: ictAnalysis.marketStructure.trend,
+        regime: ictAnalysis.marketStructure.trend,
+        regimeReason: `ICT market structure trend is ${ictAnalysis.marketStructure.trend}`,
         orderBlocks: ictAnalysis.orderBlocks.filter(ob => ob.valid).slice(0, 5),
         fairValueGaps: ictAnalysis.unfilledFVGs.slice(0, 5),
         liquidityLevels: [...ictAnalysis.buyLiquidity.slice(0, 3), ...ictAnalysis.sellLiquidity.slice(0, 3)],
@@ -803,6 +835,7 @@ export class TradingService implements OnModuleInit {
     aiRecommendation?: AiTradeRecommendation,
   ): Promise<TradingSignalDocument> {
     const signalType = scalpSetup.direction === 'BUY' ? SignalType.BUY : SignalType.SELL;
+    const regimeTelemetry = this.getScalpingRegimeTelemetry(scalpSetup);
     
     // Scalping uses different strength thresholds (lower requirements)
     let strength: SignalStrength;
@@ -846,6 +879,8 @@ export class TradingService implements OnModuleInit {
       confidence: scalpSetup.confidence,
       ictAnalysis: {
         marketStructure: aiRecommendation ? 'SCALPING_AI_CONFIRMED' : 'SCALPING',
+        regime: regimeTelemetry.regime,
+        regimeReason: regimeTelemetry.regimeReason,
         orderBlocks: [],
         fairValueGaps: [],
         liquidityLevels: [],
