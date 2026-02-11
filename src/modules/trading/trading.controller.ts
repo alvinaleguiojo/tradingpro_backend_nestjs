@@ -226,6 +226,21 @@ export class TradingController {
     };
   }
 
+  @Get('signals/by-regime')
+  @ApiOperation({ summary: 'Get signal performance grouped by regime telemetry' })
+  @ApiQuery({ name: 'accountId', required: false, description: 'MT5 account ID to filter by' })
+  @ApiQuery({ name: 'days', required: false, example: 30 })
+  async getSignalsByRegime(
+    @Query('accountId') accountId?: string,
+    @Query('days') days: number = 30,
+  ) {
+    const data = await this.tradingService.getSignalStatsByRegime(accountId, days);
+    return {
+      success: true,
+      data,
+    };
+  }
+
   @Get('logs')
   @ApiOperation({ summary: 'Get trading logs' })
   @ApiQuery({ name: 'limit', required: false, example: 50 })

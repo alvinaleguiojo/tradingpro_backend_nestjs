@@ -1283,6 +1283,198 @@ export class TradingService implements OnModuleInit {
   }
 
   /**
+   * Get signal performance grouped by regime from signal telemetry.
+   * Links signals to trades via trade.signalId.
+   */
+  async getSignalStatsByRegime(
+    accountId?: string,
+    days: number = 30,
+  ): Promise<{
+    periodDays: number;
+    accountId?: string;
+    totals: {
+      signals: number;
+      executedSignals: number;
+      closedTrades: number;
+      winningTrades: number;
+      losingTrades: number;
+      winRate: number;
+      totalProfit: number;
+    };
+    regimes: Array<{
+      regime: string;
+      regimeReason: string;
+      signals: number;
+      executedSignals: number;
+      closedTrades: number;
+      winningTrades: number;
+      losingTrades: number;
+      winRate: number;
+      totalProfit: number;
+      avgProfitPerClosedTrade: number;
+      avgConfidence: number;
+    }>;
+  }> {
+    const match: any = {};
+    if (accountId) {
+      match.accountId = accountId;
+    }
+    if (days && days > 0) {
+      const since = new Date();
+      since.setDate(since.getDate() - days);
+      match.createdAt = { $gte: since };
+    }
+
+    const regimes = await this.signalModel.aggregate([
+      { $match: match },
+      {
+        $addFields: {
+          regime: { $ifNull: ['$ictAnalysis.regime', 'UNKNOWN'] },
+          regimeReason: {
+            $ifNull: ['$ictAnalysis.regimeReason', 'No regime reason captured'],
+          },
+          signalIdStr: { $toString: '$_id' },
+        },
+      },
+      {
+        $lookup: {
+          from: 'trades',
+          let: { signalIdStr: '$signalIdStr' },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $eq: ['$signalId', '$$signalIdStr'] },
+              },
+            },
+          ],
+          as: 'linkedTrades',
+        },
+      },
+      {
+        $addFields: {
+          closedTrades: {
+            $filter: {
+              input: '$linkedTrades',
+              as: 't',
+              cond: { $eq: ['$$t.status', 'CLOSED'] },
+            },
+          },
+        },
+      },
+      {
+        $addFields: {
+          closedTradeCount: { $size: '$closedTrades' },
+          winsCount: {
+            $size: {
+              $filter: {
+                input: '$closedTrades',
+                as: 't',
+                cond: { $gt: ['$$t.profit', 0] },
+              },
+            },
+          },
+          lossesCount: {
+            $size: {
+              $filter: {
+                input: '$closedTrades',
+                as: 't',
+                cond: { $lt: ['$$t.profit', 0] },
+              },
+            },
+          },
+          signalProfit: {
+            $reduce: {
+              input: '$closedTrades',
+              initialValue: 0,
+              in: { $add: ['$$value', { $ifNull: ['$$this.profit', 0] }] },
+            },
+          },
+        },
+      },
+      {
+        $group: {
+          _id: { regime: '$regime', regimeReason: '$regimeReason' },
+          signals: { $sum: 1 },
+          executedSignals: { $sum: { $cond: ['$executed', 1, 0] } },
+          closedTrades: { $sum: '$closedTradeCount' },
+          winningTrades: { $sum: '$winsCount' },
+          losingTrades: { $sum: '$lossesCount' },
+          totalProfit: { $sum: '$signalProfit' },
+          avgConfidence: { $avg: '$confidence' },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          regime: '$_id.regime',
+          regimeReason: '$_id.regimeReason',
+          signals: 1,
+          executedSignals: 1,
+          closedTrades: 1,
+          winningTrades: 1,
+          losingTrades: 1,
+          winRate: {
+            $cond: [
+              { $gt: ['$closedTrades', 0] },
+              { $multiply: [{ $divide: ['$winningTrades', '$closedTrades'] }, 100] },
+              0,
+            ],
+          },
+          totalProfit: 1,
+          avgProfitPerClosedTrade: {
+            $cond: [
+              { $gt: ['$closedTrades', 0] },
+              { $divide: ['$totalProfit', '$closedTrades'] },
+              0,
+            ],
+          },
+          avgConfidence: { $round: ['$avgConfidence', 2] },
+        },
+      },
+      { $sort: { signals: -1, regime: 1 } },
+    ]);
+
+    const totals = regimes.reduce(
+      (acc, row) => {
+        acc.signals += row.signals || 0;
+        acc.executedSignals += row.executedSignals || 0;
+        acc.closedTrades += row.closedTrades || 0;
+        acc.winningTrades += row.winningTrades || 0;
+        acc.losingTrades += row.losingTrades || 0;
+        acc.totalProfit += Number(row.totalProfit || 0);
+        return acc;
+      },
+      {
+        signals: 0,
+        executedSignals: 0,
+        closedTrades: 0,
+        winningTrades: 0,
+        losingTrades: 0,
+        totalProfit: 0,
+      },
+    );
+
+    const overallWinRate =
+      totals.closedTrades > 0 ? (totals.winningTrades / totals.closedTrades) * 100 : 0;
+
+    return {
+      periodDays: days,
+      accountId,
+      totals: {
+        ...totals,
+        winRate: Math.round(overallWinRate * 100) / 100,
+        totalProfit: Math.round(totals.totalProfit * 100) / 100,
+      },
+      regimes: regimes.map((r) => ({
+        ...r,
+        winRate: Math.round((r.winRate || 0) * 100) / 100,
+        totalProfit: Math.round((r.totalProfit || 0) * 100) / 100,
+        avgProfitPerClosedTrade: Math.round((r.avgProfitPerClosedTrade || 0) * 100) / 100,
+      })),
+    };
+  }
+
+  /**
    * Get trading logs - optionally filtered by accountId
    */
   async getTradingLogs(limit: number = 50, accountId?: string): Promise<TradingLogDocument[]> {
