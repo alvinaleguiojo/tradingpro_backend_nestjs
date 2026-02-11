@@ -41,6 +41,7 @@ export interface ScalpingConfig {
   rangeBreakoutAtrMultiplier: number;
   rangeStopAtrMultiplier: number;
   minRangeWidthAtrMultiplier: number;
+  rangeMinRiskReward: number;
 
 }
 
@@ -77,10 +78,11 @@ const AGGRESSIVE_SCALPING_CONFIG: ScalpingConfig = {
   adxRangeThreshold: 20,
   adxTrendThreshold: 25,
   rangeLookbackCandles: 30,
-  rangeEdgeBufferPercent: 0.18,
+  rangeEdgeBufferPercent: 0.24,
   rangeBreakoutAtrMultiplier: 0.8,
   rangeStopAtrMultiplier: 0.8,
-  minRangeWidthAtrMultiplier: 2.0,
+  minRangeWidthAtrMultiplier: 1.2,
+  rangeMinRiskReward: 1.0,
 };
 
 @Injectable()
@@ -481,8 +483,8 @@ export class ScalpingStrategyService {
     }
 
     const riskRewardRatio = reward / risk;
-    if (riskRewardRatio < this.config.minRiskReward) {
-      this.logger.log(`Range setup R:R too low: ${riskRewardRatio.toFixed(2)} < ${this.config.minRiskReward}`);
+    if (riskRewardRatio < this.config.rangeMinRiskReward) {
+      this.logger.log(`Range setup R:R too low: ${riskRewardRatio.toFixed(2)} < ${this.config.rangeMinRiskReward}`);
       return null;
     }
 

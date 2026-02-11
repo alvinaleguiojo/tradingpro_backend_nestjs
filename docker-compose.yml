@@ -8,6 +8,8 @@ services:
       - NODE_ENV=production
       - PORT=4500
       - MONGODB_URI=${MONGODB_URI}
+      - EA_BRIDGE_ENABLED=true
+      - AUTO_TRADING_ENABLED=true
     ports:
       - "4500:4500"
     restart: unless-stopped
