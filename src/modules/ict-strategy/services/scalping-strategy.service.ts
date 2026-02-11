@@ -74,10 +74,10 @@ const AGGRESSIVE_SCALPING_CONFIG: ScalpingConfig = {
   rangeFilterEnabled: true,
   rangeAtrShortPeriod: 14,
   rangeAtrLongPeriod: 50,
-  rangeAtrCompressionThreshold: 0.7, // Short ATR < 70% of long ATR
-  rangeMaxRangePct: 0.5,             // 20-candle range < 0.5% of price
-  rangePriceVsAvg20Max: 0.25,        // Price within 0.25% of AVG20
-  rangeHtfTrendPctMax: 0.15,         // HTF trend within ±0.15%
+  rangeAtrCompressionThreshold: 0.85, // Short ATR < 85% of long ATR
+  rangeMaxRangePct: 0.7,              // 20-candle range < 0.7% of price
+  rangePriceVsAvg20Max: 0.35,         // Price within 0.35% of AVG20
+  rangeHtfTrendPctMax: 0.2,           // HTF trend within ±0.20%
 };
 
 @Injectable()
