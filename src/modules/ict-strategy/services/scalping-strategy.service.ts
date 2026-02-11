@@ -33,12 +33,34 @@ export interface ScalpingConfig {
 
   // Range filter settings
   rangeFilterEnabled: boolean;     // Skip trades in ranging conditions
+  rangeLookbackCandles: number;    // Candles to define the range
   rangeAtrShortPeriod: number;     // Short ATR period for compression
   rangeAtrLongPeriod: number;      // Long ATR period baseline
   rangeAtrCompressionThreshold: number; // Short/Long ATR ratio below this = compression
-  rangeMaxRangePct: number;        // Max 20-candle range as % of price to be considered ranging
+  rangeMaxRangePct: number;        // Max lookback range as % of price to be considered ranging
   rangePriceVsAvg20Max: number;    // Max deviation from AVG20 (%) for ranging
   rangeHtfTrendPctMax: number;     // Max absolute HTF trend % to treat as ranging
+  rangeBreakoutBufferPct: number;  // Buffer (as % of range) to confirm breakout
+
+  // Range grid strategy
+  rangeGridEnabled: boolean;
+  rangeGridEntryZonePct: number;   // % of range from edges to allow entries (e.g. 0.3 = outer 30%)
+  rangeGridTpTargetPct: number;    // TP target inside range (e.g. 0.5 = mid)
+  rangeGridStopBufferPct: number;  // SL buffer beyond range (as % of range)
+  rangeGridMinRangePct: number;    // Minimum range % to allow grid trades
+  rangeGridConfidence: number;     // Base confidence for grid trades
+}
+
+export interface RangeContext {
+  isRanging: boolean;
+  rangeLow: number;
+  rangeHigh: number;
+  rangeMid: number;
+  rangePct: number;
+  atrCompression: number;
+  isHtfFlat: boolean;
+  isNearAvg: boolean;
+  breakoutDirection: 'BUY' | 'SELL' | null;
 }
 
 // ULTRA AGGRESSIVE scalping defaults for XAU/USD
@@ -72,12 +94,22 @@ const AGGRESSIVE_SCALPING_CONFIG: ScalpingConfig = {
 
   // Range filter defaults (XAU/USD tuned)
   rangeFilterEnabled: true,
+  rangeLookbackCandles: 40,
   rangeAtrShortPeriod: 14,
   rangeAtrLongPeriod: 50,
-  rangeAtrCompressionThreshold: 0.85, // Short ATR < 85% of long ATR
-  rangeMaxRangePct: 0.7,              // 20-candle range < 0.7% of price
-  rangePriceVsAvg20Max: 0.35,         // Price within 0.35% of AVG20
-  rangeHtfTrendPctMax: 0.2,           // HTF trend within ±0.20%
+  rangeAtrCompressionThreshold: 0.95, // Short ATR < 95% of long ATR
+  rangeMaxRangePct: 1.2,              // Wider: 20-candle range < 1.2% of price
+  rangePriceVsAvg20Max: 0.6,          // Wider: Price within 0.6% of AVG20
+  rangeHtfTrendPctMax: 0.3,           // Wider: HTF trend within +-0.30%
+  rangeBreakoutBufferPct: 0.15,       // Breakout requires 15% of range beyond edge
+
+  // Range grid defaults
+  rangeGridEnabled: true,
+  rangeGridEntryZonePct: 0.3,
+  rangeGridTpTargetPct: 0.5,
+  rangeGridStopBufferPct: 0.15,
+  rangeGridMinRangePct: 0.3,
+  rangeGridConfidence: 45,
 };
 
 @Injectable()
@@ -95,8 +127,9 @@ export class ScalpingStrategyService {
     currentPrice: number,
     spread: number = 0,
   ): TradeSetup | null {
-    if (candles.length < 20) {
-      this.logger.warn(`Not enough candles for scalping: ${candles.length} (need 20+)`);
+    const minCandles = Math.max(20, this.config.rangeLookbackCandles);
+    if (candles.length < minCandles) {
+      this.logger.warn(`Not enough candles for scalping: ${candles.length} (need ${minCandles}+)`);
       return null;
     }
 
@@ -154,22 +187,36 @@ export class ScalpingStrategyService {
     const trendEnd = last20[last20.length - 1].close;
     const htfTrendPct = ((trendEnd - trendStart) / trendStart) * 100;
     const htfTrend = htfTrendPct > 0.1 ? 'BULLISH' : htfTrendPct < -0.1 ? 'BEARISH' : 'NEUTRAL';
-    // ===== RANGE FILTER (skip trades in ranging conditions) =====
-    const rangePct = avg20 !== 0 ? (range20 / avg20) * 100 : 100;
-    const hasLongAtr = candles.length >= this.config.rangeAtrLongPeriod + 1;
-    const atrShort = this.calculateATR(candles, this.config.rangeAtrShortPeriod);
-    const atrLong = this.calculateATR(candles, this.config.rangeAtrLongPeriod);
-    const atrCompression = hasLongAtr && atrLong > 0 ? atrShort / atrLong : 1;
-    const isHtfFlat = Math.abs(htfTrendPct) <= this.config.rangeHtfTrendPctMax;
-    const isTightRange = rangePct < this.config.rangeMaxRangePct;
-    const isAtrCompressed = hasLongAtr ? atrCompression < this.config.rangeAtrCompressionThreshold : false;
-    const isNearAvg = Math.abs(priceVsAvg20) < this.config.rangePriceVsAvg20Max;
-    const isRanging = this.config.rangeFilterEnabled &&
-      isHtfFlat &&
-      isNearAvg &&
-      (isTightRange || isAtrCompressed);
+    // ===== RANGE FILTER (wider detection + grid strategy) =====
+    const rangeContext = this.calculateRangeContext(
+      candles,
+      currentPrice,
+      avg20,
+      priceVsAvg20,
+      htfTrendPct,
+    );
     this.logger.log(`📊 HTF Trend: ${htfTrend} (${htfTrendPct.toFixed(3)}%)`);
-    this.logger.log(`📊 Range check: range=${rangePct.toFixed(3)}%, ATR short/long=${atrCompression.toFixed(2)}, priceVsAvg20=${priceVsAvg20.toFixed(3)}%, flatHTF=${isHtfFlat}`);
+    this.logger.log(
+      `📊 Range check: range=${rangeContext.rangePct.toFixed(3)}%, ATR short/long=${rangeContext.atrCompression.toFixed(2)}, ` +
+      `priceVsAvg20=${priceVsAvg20.toFixed(3)}%, flatHTF=${rangeContext.isHtfFlat}, ` +
+      `breakout=${rangeContext.breakoutDirection || 'none'}`
+    );
+
+    if (rangeContext.isRanging) {
+      if (!this.config.rangeGridEnabled) {
+        this.logger.log(`⏸️ Range filter: ranging market detected (grid disabled)`);
+        return null;
+      }
+
+      const gridSetup = this.buildRangeGridSetup(rangeContext, currentPrice);
+      if (gridSetup) {
+        this.logger.log(`🔁 RANGE GRID: ${gridSetup.direction} | SL ${gridSetup.stopLoss.toFixed(2)} | TP ${gridSetup.takeProfit.toFixed(2)}`);
+        return gridSetup;
+      }
+
+      this.logger.log(`⏸️ Range filter: no grid entry (price in mid-range or range too small)`);
+      return null;
+    }
     
     // ===== OVEREXTENSION DETECTION =====
     // More strict thresholds to reduce false reversals
@@ -321,11 +368,6 @@ export class ScalpingStrategyService {
       return null;
     }
 
-    if (isRanging) {
-      this.logger.log(`⏸️ Range filter: skipping trade in neutral HTF conditions`);
-      return null;
-    }
-
     // Log final decision
     this.logger.log(`🎯 Direction: ${direction}, Confidence: ${confidence}%, Reasons: ${reasons.join(', ')}`);
 
@@ -387,6 +429,130 @@ export class ScalpingStrategyService {
       confidence: Math.min(100, confidence),
       reasons,
       confluences,
+    };
+  }
+
+  /**
+   * Public range context helper for breakout handling in trading service
+   */
+  getRangeContext(candles: Candle[], currentPrice: number): RangeContext | null {
+    if (candles.length < Math.max(20, this.config.rangeLookbackCandles)) {
+      return null;
+    }
+
+    const last20 = candles.slice(-20);
+    const avg20 = last20.reduce((sum, c) => sum + c.close, 0) / 20;
+    const priceVsAvg20 = ((currentPrice - avg20) / avg20) * 100;
+    const trendStart = last20[0].close;
+    const trendEnd = last20[last20.length - 1].close;
+    const htfTrendPct = ((trendEnd - trendStart) / trendStart) * 100;
+
+    return this.calculateRangeContext(candles, currentPrice, avg20, priceVsAvg20, htfTrendPct);
+  }
+
+  private calculateRangeContext(
+    candles: Candle[],
+    currentPrice: number,
+    avg20: number,
+    priceVsAvg20: number,
+    htfTrendPct: number,
+  ): RangeContext {
+    const lookback = Math.min(candles.length, this.config.rangeLookbackCandles);
+    const lookbackCandles = candles.slice(-lookback);
+    const rangeHigh = Math.max(...lookbackCandles.map(c => c.high));
+    const rangeLow = Math.min(...lookbackCandles.map(c => c.low));
+    const rangeSize = rangeHigh - rangeLow;
+    const rangePct = avg20 !== 0 ? (rangeSize / avg20) * 100 : 100;
+
+    const hasLongAtr = candles.length >= this.config.rangeAtrLongPeriod + 1;
+    const atrShort = this.calculateATR(candles, this.config.rangeAtrShortPeriod);
+    const atrLong = this.calculateATR(candles, this.config.rangeAtrLongPeriod);
+    const atrCompression = hasLongAtr && atrLong > 0 ? atrShort / atrLong : 1;
+
+    const isHtfFlat = Math.abs(htfTrendPct) <= this.config.rangeHtfTrendPctMax;
+    const isNearAvg = Math.abs(priceVsAvg20) < this.config.rangePriceVsAvg20Max;
+    const isTightRange = rangePct < this.config.rangeMaxRangePct;
+    const isAtrCompressed = hasLongAtr ? atrCompression < this.config.rangeAtrCompressionThreshold : false;
+
+    const isRanging = this.config.rangeFilterEnabled &&
+      isHtfFlat &&
+      isNearAvg &&
+      (isTightRange || isAtrCompressed);
+
+    const breakoutBuffer = rangeSize * this.config.rangeBreakoutBufferPct;
+    let breakoutDirection: 'BUY' | 'SELL' | null = null;
+    if (rangeSize > 0) {
+      if (currentPrice > rangeHigh + breakoutBuffer) breakoutDirection = 'BUY';
+      else if (currentPrice < rangeLow - breakoutBuffer) breakoutDirection = 'SELL';
+    }
+
+    return {
+      isRanging,
+      rangeLow,
+      rangeHigh,
+      rangeMid: rangeLow + rangeSize * 0.5,
+      rangePct,
+      atrCompression,
+      isHtfFlat,
+      isNearAvg,
+      breakoutDirection,
+    };
+  }
+
+  private buildRangeGridSetup(
+    rangeContext: RangeContext,
+    currentPrice: number,
+  ): TradeSetup | null {
+    const rangeSize = rangeContext.rangeHigh - rangeContext.rangeLow;
+    if (rangeSize <= 0) return null;
+
+    if (rangeContext.rangePct < this.config.rangeGridMinRangePct) {
+      return null;
+    }
+
+    const positionPct = ((currentPrice - rangeContext.rangeLow) / rangeSize) * 100;
+    const lowerZone = this.config.rangeGridEntryZonePct * 100;
+    const upperZone = (1 - this.config.rangeGridEntryZonePct) * 100;
+
+    let direction: 'BUY' | 'SELL' | null = null;
+    if (positionPct <= lowerZone) direction = 'BUY';
+    else if (positionPct >= upperZone) direction = 'SELL';
+    else return null;
+
+    const stopBuffer = rangeSize * this.config.rangeGridStopBufferPct;
+    const tpTarget = this.config.rangeGridTpTargetPct;
+
+    let stopLoss: number;
+    let takeProfit: number;
+    if (direction === 'BUY') {
+      stopLoss = rangeContext.rangeLow - stopBuffer;
+      takeProfit = rangeContext.rangeLow + (rangeSize * tpTarget);
+    } else {
+      stopLoss = rangeContext.rangeHigh + stopBuffer;
+      takeProfit = rangeContext.rangeHigh - (rangeSize * tpTarget);
+    }
+
+    const risk = Math.abs(currentPrice - stopLoss);
+    const reward = Math.abs(takeProfit - currentPrice);
+    if (risk <= 0 || reward <= 0) return null;
+
+    const riskRewardRatio = reward / risk;
+    const confidence = Math.max(this.config.rangeGridConfidence, this.config.minConfidence);
+
+    return {
+      direction,
+      entryPrice: currentPrice,
+      stopLoss,
+      takeProfit,
+      riskRewardRatio: Math.round(riskRewardRatio * 100) / 100,
+      confidence: Math.min(100, confidence),
+      reasons: [
+        `Range grid ${direction === 'BUY' ? 'buy' : 'sell'} near ${direction === 'BUY' ? 'lower' : 'upper'} zone`,
+      ],
+      confluences: [
+        'Ranging market',
+        `Grid TP ${Math.round(tpTarget * 100)}%`,
+      ],
     };
   }
 
@@ -818,4 +984,5 @@ export class ScalpingStrategyService {
     }
   }
 }
+
 
