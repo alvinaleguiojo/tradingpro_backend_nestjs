@@ -102,11 +102,12 @@ export class Mt5Service implements OnModuleInit {
     @InjectModel(EaCommand.name)
     private eaCommandModel: Model<EaCommandDocument>,
   ) {
-    this.eaBridgeEnabled = this.configService.get('EA_BRIDGE_ENABLED', 'false') === 'true';
+    // Force EA Bridge mode (mtapi.io disabled)
+    this.eaBridgeEnabled = true;
     this.eaCommandTtlSeconds = parseInt(this.configService.get('EA_COMMAND_TTL_SECONDS', '60'), 10);
-    this.baseUrl = this.configService.get('MT5_API_BASE_URL', 'https://mt5.mtapi.io');
+    this.baseUrl = this.configService.get('MT5_API_BASE_URL', '');
     this.axiosClient = axios.create({
-      baseURL: this.baseUrl,
+      baseURL: this.baseUrl || 'http://localhost/disabled',
       timeout: this.REQUEST_TIMEOUT,
     });
   }
@@ -976,6 +977,9 @@ export class Mt5Service implements OnModuleInit {
    * Returns timezone offset in hours (e.g., 2 for UTC+2)
    */
   async getServerTimezone(): Promise<{ timezone: string; offsetHours: number } | null> {
+    if (this.eaBridgeEnabled) {
+      return null;
+    }
     await this.checkConnection();
     
     try {
@@ -1011,6 +1015,9 @@ export class Mt5Service implements OnModuleInit {
     company: string;
     currency: string;
   } | null> {
+    if (this.eaBridgeEnabled) {
+      return null;
+    }
     await this.checkConnection();
     
     try {
@@ -1478,6 +1485,9 @@ export class Mt5Service implements OnModuleInit {
   }
 
   async getSymbolInfo(symbol: string): Promise<any> {
+    if (this.eaBridgeEnabled) {
+      return null;
+    }
     await this.checkConnection();
 
     try {
@@ -1496,6 +1506,9 @@ export class Mt5Service implements OnModuleInit {
    * @param filter Optional filter string to search for specific symbols (e.g., 'XAU', 'GOLD', 'EUR')
    */
   async getSymbolList(filter?: string): Promise<string[]> {
+    if (this.eaBridgeEnabled) {
+      return [];
+    }
     await this.checkConnection();
 
     try {
@@ -1525,6 +1538,9 @@ export class Mt5Service implements OnModuleInit {
    * @param filter Optional filter string to search for specific symbols
    */
   async getSymbols(filter?: string): Promise<any[]> {
+    if (this.eaBridgeEnabled) {
+      return [];
+    }
     await this.checkConnection();
 
     try {
@@ -1555,6 +1571,9 @@ export class Mt5Service implements OnModuleInit {
    * @param days Number of days of history to fetch (default 30)
    */
   async getTradeHistory(days: number = 30): Promise<any> {
+    if (this.eaBridgeEnabled) {
+      return [];
+    }
     await this.checkConnection();
 
     try {
@@ -1598,6 +1617,9 @@ export class Mt5Service implements OnModuleInit {
    * @param days Number of days of history to fetch (default 30)
    */
   async getDealsHistory(days: number = 30): Promise<any[]> {
+    if (this.eaBridgeEnabled) {
+      return [];
+    }
     await this.checkConnection();
 
     try {
@@ -1775,6 +1797,9 @@ export class Mt5Service implements OnModuleInit {
    * Search for brokers by company name
    */
   async searchBrokers(companyName: string): Promise<any[]> {
+    if (this.eaBridgeEnabled) {
+      return [];
+    }
     try {
       const response = await this.axiosClient.get('/Search', {
         params: { company: companyName },

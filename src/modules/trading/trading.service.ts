@@ -250,11 +250,6 @@ export class TradingService implements OnModuleInit {
           return null;
         }
 
-        const rangeContext = this.scalpingStrategy.getRangeContext(formattedCandles, currentPrice);
-        if (rangeContext?.breakoutDirection) {
-          await this.closeOppositeRangeTrades(symbol, rangeContext.breakoutDirection);
-        }
-
         // Run scalping strategy analysis
         const scalpSetup = this.scalpingStrategy.analyzeForScalp(
           formattedCandles,
@@ -509,11 +504,6 @@ export class TradingService implements OnModuleInit {
           return null;
         }
 
-        const rangeContext = this.scalpingStrategy.getRangeContext(candles, currentPrice);
-        if (rangeContext?.breakoutDirection) {
-          await this.closeOppositeRangeTrades(symbol, rangeContext.breakoutDirection, accountId);
-        }
-
         const scalpSetup = this.scalpingStrategy.analyzeForScalp(candles, currentPrice, spread);
         if (!scalpSetup) {
           this.logger.log('[EA] No scalping setup found');
@@ -591,40 +581,6 @@ export class TradingService implements OnModuleInit {
     } catch (error) {
       this.logger.error(`[EA] Analysis failed for ${accountId}: ${error.message}`);
       return null;
-    }
-  }
-
-  private normalizeOrderType(type: string): 'BUY' | 'SELL' | null {
-    const t = String(type).toUpperCase();
-    if (t === 'BUY' || t === '0' || t === 'OP_BUY') return 'BUY';
-    if (t === 'SELL' || t === '1' || t === 'OP_SELL') return 'SELL';
-    return null;
-  }
-
-  private async closeOppositeRangeTrades(
-    symbol: string,
-    breakoutDirection: 'BUY' | 'SELL',
-    accountId?: string,
-  ): Promise<void> {
-    try {
-      if (accountId) {
-        await this.mt5Service.ensureAccountConnection(accountId);
-      }
-
-      const opposite = breakoutDirection === 'BUY' ? 'SELL' : 'BUY';
-      const openOrders = await this.mt5Service.getOpenedOrdersForSymbol(symbol);
-      const toClose = openOrders.filter(o => this.normalizeOrderType(o.type) === opposite);
-
-      if (toClose.length === 0) {
-        return;
-      }
-
-      this.logger.log(`🚪 Range breakout ${breakoutDirection}: closing ${toClose.length} ${opposite} trades on ${symbol}`);
-      for (const order of toClose) {
-        await this.mt5Service.closeOrder(order.ticket);
-      }
-    } catch (error) {
-      this.logger.error(`Failed to close opposite trades after range breakout for ${symbol}`, error);
     }
   }
 
