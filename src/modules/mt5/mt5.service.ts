@@ -86,6 +86,8 @@ export class Mt5Service implements OnModuleInit {
   private lastTokenValidation: number = 0;
   private readonly TOKEN_VALIDATION_INTERVAL = 60000; // Revalidate token every 60s
   private currentTokenAccountId: string | null = null; // Track which account the current token belongs to
+  private lastEaBridgeStatusLog: { accountId: string; online: boolean; timestamp: number } | null = null;
+  private readonly EA_BRIDGE_LOG_DEBOUNCE_MS = 15000;
 
   // EA Bridge mode — reads from EaSession cache instead of calling mtapi.io
   private readonly eaBridgeEnabled: boolean;
@@ -277,12 +279,24 @@ export class Mt5Service implements OnModuleInit {
       this.currentTokenAccountId = userId;
       this.token = 'ea-bridge-mode';
       const session = await this.getActiveEaSession(userId);
-      if (session) {
-        this.logger.log(`EA Bridge: account ${userId} set (online: ${Date.now() - session.lastSyncAt.getTime() < 30000})`);
-        return true;
+      const isOnline = !!session && Date.now() - session.lastSyncAt.getTime() < 30000;
+      const now = Date.now();
+      const shouldLog =
+        !this.lastEaBridgeStatusLog ||
+        this.lastEaBridgeStatusLog.accountId !== userId ||
+        this.lastEaBridgeStatusLog.online !== isOnline ||
+        now - this.lastEaBridgeStatusLog.timestamp >= this.EA_BRIDGE_LOG_DEBOUNCE_MS;
+
+      if (shouldLog) {
+        if (session) {
+          this.logger.log(`EA Bridge: account ${userId} set (online: ${isOnline})`);
+        } else {
+          this.logger.warn(`EA Bridge: no session found for account ${userId}`);
+        }
+        this.lastEaBridgeStatusLog = { accountId: userId, online: isOnline, timestamp: now };
       }
-      this.logger.warn(`EA Bridge: no session found for account ${userId}`);
-      return false;
+
+      return !!session;
     }
 
     this.logger.log(`ensureAccountConnection called for user ${userId}, current: ${this.currentTokenAccountId}, hasToken: ${!!this.token}`);
@@ -566,6 +580,14 @@ export class Mt5Service implements OnModuleInit {
    * This verifies which account the token is actually connected to
    */
   async getVerifiedAccountId(): Promise<string | null> {
+    if (this.eaBridgeEnabled) {
+      if (this.currentTokenAccountId) {
+        return this.currentTokenAccountId;
+      }
+      const session = await this.getActiveEaSession();
+      return session?.accountId || null;
+    }
+
     try {
       const details = await this.getAccountDetails();
       if (details && details.accountNumber) {

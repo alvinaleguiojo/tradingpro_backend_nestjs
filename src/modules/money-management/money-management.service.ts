@@ -281,11 +281,12 @@ export class MoneyManagementService implements OnModuleInit {
    * The caller (auto-trading.service) must ensure ensureMt5ConnectionForAccount is called first.
    */
   async syncWithMt5(accountId: string): Promise<TradingAccountStateDocument> {
+    const isEaBridgeMode = this.mt5Service.isEaBridgeMode();
     // CRITICAL: Verify we're connected to the CORRECT account via API call
     // This prevents using wrong account's balance due to cached/stale tokens
     const verifiedAccountId = await this.mt5Service.getVerifiedAccountId();
     
-    if (!verifiedAccountId || verifiedAccountId !== accountId) {
+    if (!isEaBridgeMode && (!verifiedAccountId || verifiedAccountId !== accountId)) {
       this.logger.warn(`🚨 MT5 token mismatch! Expected: ${accountId}, Actual: ${verifiedAccountId || 'unknown'} - using stored state ONLY`);
       const existingState = await this.accountStateModel.findOne({ accountId }).exec();
       if (existingState) {
@@ -315,32 +316,33 @@ export class MoneyManagementService implements OnModuleInit {
     this.logger.log(`✅ MT5 account verified: ${verifiedAccountId}`);
     
     const accountSummary = await this.mt5Service.getAccountSummary();
-    
+
     // DOUBLE-CHECK: Verify account ID again after getting summary (prevents race conditions)
-    const doubleCheckAccountId = await this.mt5Service.getVerifiedAccountId();
-    if (!doubleCheckAccountId || doubleCheckAccountId !== accountId) {
-      this.logger.warn(`🚨 RACE CONDITION DETECTED! Account changed mid-sync. Expected: ${accountId}, Got: ${doubleCheckAccountId || 'unknown'}`);
-      const existingState = await this.accountStateModel.findOne({ accountId }).exec();
-      if (existingState) {
-        return existingState;
+    if (!isEaBridgeMode) {
+      const doubleCheckAccountId = await this.mt5Service.getVerifiedAccountId();
+      if (!doubleCheckAccountId || doubleCheckAccountId !== accountId) {
+        this.logger.warn(`🚨 RACE CONDITION DETECTED! Account changed mid-sync. Expected: ${accountId}, Got: ${doubleCheckAccountId || 'unknown'}`);
+        const existingState = await this.accountStateModel.findOne({ accountId }).exec();
+        if (existingState) {
+          return existingState;
+        }
+        // Return safe defaults
+        return new this.accountStateModel({
+          accountId,
+          initialBalance: 100,
+          currentBalance: 100,
+          currentLevel: 1,
+          currentLotSize: 0.01,
+          dailyProfit: 0,
+          weeklyProfit: 0,
+          monthlyProfit: 0,
+          totalProfit: 0,
+          lastTradingDay: new Date(),
+          weekStartDate: this.getWeekStartDate(),
+          monthStartDate: this.getMonthStartDate(),
+        });
       }
-      // Return safe defaults
-      return new this.accountStateModel({
-        accountId,
-        initialBalance: 100,
-        currentBalance: 100,
-        currentLevel: 1,
-        currentLotSize: 0.01,
-        dailyProfit: 0,
-        weeklyProfit: 0,
-        monthlyProfit: 0,
-        totalProfit: 0,
-        lastTradingDay: new Date(),
-        weekStartDate: this.getWeekStartDate(),
-        monthStartDate: this.getMonthStartDate(),
-      });
     }
-    
     // Log the balance we got to help debug any future issues
     this.logger.log(`💰 Account ${accountId}: Balance from MT5 = $${accountSummary?.balance?.toFixed(2) || 'unknown'}`);
     
@@ -475,3 +477,4 @@ export class MoneyManagementService implements OnModuleInit {
     return d1.getMonth() === d2.getMonth() && d1.getFullYear() === d2.getFullYear();
   }
 }
+
