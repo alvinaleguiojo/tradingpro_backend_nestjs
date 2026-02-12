@@ -19,6 +19,7 @@ input int      InpCandleCount    = 100;             // Number of M5 candles to s
 input int      InpSlippage       = 30;              // Max slippage (points)
 input ulong    InpMagicNumber    = 202602;          // Magic Number
 input bool     InpShowPanel      = true;            // Show panel on chart
+input string   InpEaSyncSecret   = "";              // EA sync secret (maps to backend EA_SYNC_SECRET)
 input string   InpApiKey         = "";              // API Key (optional)
 
 //--- Execution Result Tracking
@@ -104,6 +105,13 @@ double JsonGetDouble(const string &json, const string key)
 string HttpPost(const string url, const string body)
   {
    string headers = "Content-Type: application/json\r\n";
+   string eaSecret = InpEaSyncSecret;
+   if(eaSecret == "" && InpApiKey != "")
+      eaSecret = InpApiKey; // Backward compatibility for older EA config
+
+   if(eaSecret != "")
+      headers += "x-ea-secret: " + eaSecret + "\r\n";
+
    if(InpApiKey != "")
       headers += "X-Api-Key: " + InpApiKey + "\r\n";
 
@@ -728,10 +736,16 @@ int OnInit()
    Print("  API: ", g_apiUrl);
    Print("  Account: ", g_accountId);
    Print("  Symbol: ", InpSymbol);
-   Print("  Poll: ", InpPollSeconds, "s");
-   Print("  Candles: ", InpCandleCount);
-   Print("  Magic: ", InpMagicNumber);
-   Print("=============================================");
+    Print("  Poll: ", InpPollSeconds, "s");
+    Print("  Candles: ", InpCandleCount);
+    Print("  Magic: ", InpMagicNumber);
+    Print("  EA Secret: ", (InpEaSyncSecret != "" || InpApiKey != "") ? "SET" : "MISSING");
+    Print("=============================================");
+
+    if(InpEaSyncSecret == "" && InpApiKey == "")
+      {
+       Print("WARNING: EA sync secret is missing. /ea/sync requests will return 401.");
+      }
 
    // Test connection
    string health = HttpGet(g_apiUrl + "/health");
