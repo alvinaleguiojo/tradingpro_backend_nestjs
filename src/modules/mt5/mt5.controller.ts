@@ -1,9 +1,11 @@
-import { Controller, Get, Post, Query, Body, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Query, Body, BadRequestException, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { Mt5Service } from './mt5.service';
+import { ApiTokenGuard } from '../../common/guards/api-token.guard';
 
 @ApiTags('mt5')
 @Controller('mt5')
+@UseGuards(ApiTokenGuard)
 export class Mt5Controller {
   constructor(private readonly mt5Service: Mt5Service) {}
 

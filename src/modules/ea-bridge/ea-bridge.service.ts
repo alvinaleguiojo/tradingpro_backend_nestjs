@@ -294,13 +294,30 @@ export class EaBridgeService {
    * Check if analysis is due and run it
    */
   private async checkAndRunAnalysis(dto: EaSyncRequestDto, now: Date) {
-    const session = await this.eaSessionModel.findOne({ accountId: dto.accountId }).exec();
-    const lastAnalysis = session?.lastAnalysisAt?.getTime() || 0;
-    const elapsed = now.getTime() - lastAnalysis;
+    // Atomically lease analysis slot for this account to avoid duplicate analysis
+    // when multiple sync requests arrive at nearly the same time.
+    const analysisDueBefore = new Date(now.getTime() - this.analysisIntervalMs);
+    const leasedSession = await this.eaSessionModel
+      .findOneAndUpdate(
+        {
+          accountId: dto.accountId,
+          $or: [{ lastAnalysisAt: { $lt: analysisDueBefore } }, { lastAnalysisAt: { $exists: false } }],
+        },
+        { $set: { lastAnalysisAt: now } },
+        { new: true },
+      )
+      .exec();
 
-    if (elapsed < this.analysisIntervalMs) {
-      return null; // Not time yet
+    if (!leasedSession) {
+      return null; // Another sync already ran analysis recently or currently owns this interval
     }
+
+    const previousAnalysisAt = leasedSession.lastAnalysisAt
+      ? new Date(leasedSession.lastAnalysisAt.getTime() - this.analysisIntervalMs)
+      : null;
+    const elapsed = previousAnalysisAt
+      ? now.getTime() - previousAnalysisAt.getTime()
+      : this.analysisIntervalMs;
 
     this.logger.log(
       `Running analysis for account ${dto.accountId} (${Math.round(elapsed / 1000)}s since last)`,
@@ -329,16 +346,10 @@ export class EaBridgeService {
         dto.symbol,
       );
 
-      // Update last analysis time
-      await this.eaSessionModel.updateOne(
-        { accountId: dto.accountId },
-        { lastAnalysisAt: now },
-      );
-
       if (signal && signal.signalType !== 'HOLD') {
         // Check max positions
         const openPositionCount = dto.positions?.length || 0;
-        const maxPositions = parseInt(this.configService.get('TRADING_MAX_POSITIONS', '1'), 10);
+        const maxPositions = parseInt(this.configService.get('TRADING_MAX_POSITIONS', '4'), 10);
 
         if (openPositionCount >= maxPositions) {
           this.logger.log(
@@ -371,11 +382,6 @@ export class EaBridgeService {
       return signal;
     } catch (err) {
       this.logger.error(`Analysis error for ${dto.accountId}: ${err.message}`);
-      // Still update lastAnalysisAt to prevent rapid retries
-      await this.eaSessionModel.updateOne(
-        { accountId: dto.accountId },
-        { lastAnalysisAt: now },
-      );
       return null;
     }
   }
@@ -392,29 +398,35 @@ export class EaBridgeService {
    * Get pending commands and mark them as SENT
    */
   private async getPendingCommands(accountId: string, now: Date): Promise<EaCommandDocument[]> {
-    const commands = await this.eaCommandModel
-      .find({
-        accountId,
-        status: EaCommandStatus.PENDING,
-        $or: [
-          { expiresAt: { $gt: now } },
-          { expiresAt: { $exists: false } },
-        ],
-      })
-      .sort({ createdAt: 1 })
-      .exec();
+    const claimedCommands: EaCommandDocument[] = [];
 
-    if (commands.length > 0) {
-      // Mark as SENT so they're not sent again
-      const ids = commands.map((c) => (c as any)._id);
-      await this.eaCommandModel.updateMany(
-        { _id: { $in: ids } },
-        { status: EaCommandStatus.SENT, sentAt: now },
-      );
-      this.logger.log(`Sending ${commands.length} commands to EA for account ${accountId}`);
+    // Claim commands one-by-one with atomic findOneAndUpdate so concurrent sync requests
+    // cannot dispatch the same command twice.
+    while (true) {
+      const claimed = await this.eaCommandModel
+        .findOneAndUpdate(
+          {
+            accountId,
+            status: EaCommandStatus.PENDING,
+            $or: [{ expiresAt: { $gt: now } }, { expiresAt: { $exists: false } }],
+          },
+          { $set: { status: EaCommandStatus.SENT, sentAt: now } },
+          { new: true, sort: { createdAt: 1 } },
+        )
+        .exec();
+
+      if (!claimed) break;
+      claimedCommands.push(claimed);
+
+      // Hard cap to prevent pathological loops if data is corrupted.
+      if (claimedCommands.length >= 100) break;
     }
 
-    return commands;
+    if (claimedCommands.length > 0) {
+      this.logger.log(`Sending ${claimedCommands.length} commands to EA for account ${accountId}`);
+    }
+
+    return claimedCommands;
   }
 
   /**

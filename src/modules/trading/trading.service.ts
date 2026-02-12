@@ -1039,8 +1039,8 @@ export class TradingService implements OnModuleInit {
         return null;
       }
 
-      // Check max positions - each account should only have 1 open position at a time
-      const maxPositions = 1;
+      // Check max positions limit from config (default: 4)
+      const maxPositions = parseInt(this.configService.get('TRADING_MAX_POSITIONS', '4'), 10);
       const allOpenOrders = await this.mt5Service.getOpenedOrders();
       
       // Double-check account is still correct after MT5 API call

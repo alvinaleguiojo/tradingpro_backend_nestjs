@@ -12,6 +12,7 @@ import { Mt5Module } from '../mt5/mt5.module';
 import { IctStrategyModule } from '../ict-strategy/ict-strategy.module';
 import { OpenAiModule } from '../openai/openai.module';
 import { MoneyManagementModule } from '../money-management/money-management.module';
+import { ApiTokenGuard } from '../../common/guards/api-token.guard';
 
 @Module({
   imports: [
@@ -28,7 +29,7 @@ import { MoneyManagementModule } from '../money-management/money-management.modu
     MoneyManagementModule,
   ],
   controllers: [TradingController],
-  providers: [TradingService, AutoTradingService],
+  providers: [TradingService, AutoTradingService, ApiTokenGuard],
   exports: [TradingService, AutoTradingService],
 })
 export class TradingModule {}

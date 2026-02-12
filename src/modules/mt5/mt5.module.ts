@@ -7,6 +7,7 @@ import { Mt5Connection, Mt5ConnectionSchema } from '../../schemas/mt5-connection
 import { TradingLog, TradingLogSchema } from '../../schemas/trading-log.schema';
 import { EaSession, EaSessionSchema } from '../../schemas/ea-session.schema';
 import { EaCommand, EaCommandSchema } from '../../schemas/ea-command.schema';
+import { ApiTokenGuard } from '../../common/guards/api-token.guard';
 
 @Module({
   imports: [
@@ -22,7 +23,7 @@ import { EaCommand, EaCommandSchema } from '../../schemas/ea-command.schema';
     ]),
   ],
   controllers: [Mt5Controller],
-  providers: [Mt5Service],
+  providers: [Mt5Service, ApiTokenGuard],
   exports: [Mt5Service],
 })
 export class Mt5Module {}

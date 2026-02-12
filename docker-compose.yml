@@ -8,6 +8,10 @@ services:
       - NODE_ENV=production
       - PORT=4500
       - MONGODB_URI=${MONGODB_URI}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - API_AUTH_TOKEN=${API_AUTH_TOKEN}
+      - EA_SYNC_SECRET=${EA_SYNC_SECRET}
+      - TRADING_MAX_POSITIONS=${TRADING_MAX_POSITIONS}
       - EA_BRIDGE_ENABLED=true
       - AUTO_TRADING_ENABLED=true
     ports:

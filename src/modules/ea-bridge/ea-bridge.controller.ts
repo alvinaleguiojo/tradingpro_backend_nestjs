@@ -1,22 +1,43 @@
-import { Controller, Post, Get, Body, Param, Query } from '@nestjs/common';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Param,
+  Post,
+  Query,
+  UnauthorizedException,
+  UseGuards,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiTokenGuard } from '../../common/guards/api-token.guard';
+import { EaCommandType } from '../../schemas/ea-command.schema';
 import { EaBridgeService } from './ea-bridge.service';
 import { EaSyncRequestDto } from './dto/ea-sync.dto';
-import { EaCommandType } from '../../schemas/ea-command.schema';
 
 @ApiTags('ea')
 @Controller('ea')
 export class EaBridgeController {
-  constructor(private readonly eaBridgeService: EaBridgeService) {}
+  constructor(
+    private readonly eaBridgeService: EaBridgeService,
+    private readonly configService: ConfigService,
+  ) {}
 
   @Post('sync')
-  @ApiOperation({ summary: 'EA sync — pushes data, receives commands' })
-  async sync(@Body() dto: EaSyncRequestDto) {
+  @ApiOperation({ summary: 'EA sync - pushes data, receives commands' })
+  async sync(
+    @Body() dto: EaSyncRequestDto,
+    @Headers('x-ea-secret') eaSecretHeader?: string,
+    @Headers('authorization') authHeader?: string,
+  ) {
+    this.validateEaSyncSecret(eaSecretHeader, authHeader);
     return this.eaBridgeService.handleSync(dto);
   }
 
   @Get('sessions')
   @ApiOperation({ summary: 'Get all EA sessions' })
+  @UseGuards(ApiTokenGuard)
   async getSessions(@Query('onlineOnly') onlineOnly?: string) {
     const sessions =
       onlineOnly === 'true'
@@ -41,6 +62,7 @@ export class EaBridgeController {
 
   @Get('session/:accountId')
   @ApiOperation({ summary: 'Get EA session for an account' })
+  @UseGuards(ApiTokenGuard)
   async getSession(@Param('accountId') accountId: string) {
     const session = await this.eaBridgeService.getSessionByAccount(accountId);
     if (!session) {
@@ -57,6 +79,7 @@ export class EaBridgeController {
 
   @Get('commands/:id')
   @ApiOperation({ summary: 'Get command status' })
+  @UseGuards(ApiTokenGuard)
   async getCommandStatus(@Param('id') id: string) {
     const command = await this.eaBridgeService.getCommandStatus(id);
     if (!command) {
@@ -67,6 +90,7 @@ export class EaBridgeController {
 
   @Get('commands')
   @ApiOperation({ summary: 'Get recent commands for an account' })
+  @UseGuards(ApiTokenGuard)
   async getCommands(
     @Query('accountId') accountId: string,
     @Query('limit') limit?: string,
@@ -83,6 +107,7 @@ export class EaBridgeController {
 
   @Post('command/send')
   @ApiOperation({ summary: 'Send a manual trade command to EA' })
+  @UseGuards(ApiTokenGuard)
   async sendCommand(
     @Body()
     body: {
@@ -111,10 +136,30 @@ export class EaBridgeController {
         success: true,
         commandId: (command as any)._id.toString(),
         status: command.status,
-        message: 'Command queued — EA will execute on next sync (~5 seconds)',
+        message: 'Command queued - EA will execute on next sync (~5 seconds)',
       };
     } catch (err) {
       return { success: false, message: err.message };
     }
+  }
+
+  private validateEaSyncSecret(eaSecretHeader?: string, authHeader?: string): void {
+    const expectedSecret = this.configService.get<string>('EA_SYNC_SECRET');
+    if (!expectedSecret) {
+      throw new UnauthorizedException('EA sync secret is not configured');
+    }
+
+    const authToken = this.extractToken(authHeader);
+    const providedSecret = (eaSecretHeader || authToken || '').trim();
+    if (!providedSecret || providedSecret !== expectedSecret) {
+      throw new UnauthorizedException('Unauthorized EA sync request');
+    }
+  }
+
+  private extractToken(authHeader?: string): string | null {
+    if (!authHeader) return null;
+    const [scheme, token] = authHeader.split(' ');
+    if (scheme?.toLowerCase() === 'bearer' && token) return token.trim();
+    return authHeader.trim();
   }
 }

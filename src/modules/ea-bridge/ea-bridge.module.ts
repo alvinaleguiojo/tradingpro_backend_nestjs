@@ -8,6 +8,7 @@ import { Trade, TradeSchema } from '../../schemas/trade.schema';
 import { TradingLog, TradingLogSchema } from '../../schemas/trading-log.schema';
 import { TradingModule } from '../trading/trading.module';
 import { MoneyManagementModule } from '../money-management/money-management.module';
+import { ApiTokenGuard } from '../../common/guards/api-token.guard';
 
 @Module({
   imports: [
@@ -21,7 +22,7 @@ import { MoneyManagementModule } from '../money-management/money-management.modu
     MoneyManagementModule,
   ],
   controllers: [EaBridgeController],
-  providers: [EaBridgeService],
+  providers: [EaBridgeService, ApiTokenGuard],
   exports: [EaBridgeService],
 })
 export class EaBridgeModule {}

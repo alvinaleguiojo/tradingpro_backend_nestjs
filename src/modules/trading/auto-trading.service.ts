@@ -513,6 +513,11 @@ export class AutoTradingService implements OnModuleInit {
       return { success: false, message: 'Auto trading is disabled' };
     }
 
+    const cycleLockId = await this.acquireCycleLock();
+    if (!cycleLockId) {
+      return { success: false, message: 'Another instance is already running the trading cycle' };
+    }
+
     this.isRunning = true;
     const startTime = Date.now();
     const accountResults: any[] = [];
@@ -685,6 +690,7 @@ export class AutoTradingService implements OnModuleInit {
 
     } finally {
       this.isRunning = false;
+      await this.releaseCycleLock(cycleLockId);
     }
   }
 
