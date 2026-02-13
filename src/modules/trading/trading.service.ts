@@ -14,6 +14,7 @@ import { MoneyManagementService } from '../money-management/money-management.ser
 import { KillZoneService } from '../ict-strategy/services/kill-zone.service';
 import { ScalpingStrategyService } from '../ict-strategy/services/scalping-strategy.service';
 import { IctAnalysisResult, TradeSetup, Candle } from '../ict-strategy/types';
+import { MarketSentimentService } from '../ict-strategy/services/market-sentiment.service';
 
 @Injectable()
 export class TradingService implements OnModuleInit {
@@ -37,6 +38,7 @@ export class TradingService implements OnModuleInit {
     private moneyManagementService: MoneyManagementService,
     private killZoneService: KillZoneService,
     private scalpingStrategy: ScalpingStrategyService,
+    private marketSentimentService: MarketSentimentService,
   ) {}
 
   async onModuleInit() {
@@ -239,17 +241,6 @@ export class TradingService implements OnModuleInit {
       if (this.scalpingMode) {
         this.logger.log(`⚡ Running AGGRESSIVE SCALPING analysis for ${symbol} on ${analysisTimeframe}`);
         
-        // Skip high-impact news for scalping (too risky)
-        if (this.ictStrategyService.isHighImpactNewsTime()) {
-          await this.logEvent(
-            TradingEventType.MARKET_ANALYSIS,
-            'Scalping paused - High-impact news time',
-            { symbol, timeframe: analysisTimeframe },
-            'info',
-          );
-          return null;
-        }
-
         // Run scalping strategy analysis
         const scalpSetup = this.scalpingStrategy.analyzeForScalp(
           formattedCandles,
@@ -268,9 +259,23 @@ export class TradingService implements OnModuleInit {
           `TP: ${scalpSetup.takeProfit.toFixed(2)} | R:R ${scalpSetup.riskRewardRatio}`
         );
 
-        // Require HTF alignment to avoid counter-trend scalps
+        const newsMode = this.getNewsTradeMode();
+        const isNewsActive = this.shouldApplyNewsFilters(symbol) && this.ictStrategyService.isHighImpactNewsTime();
+        if (isNewsActive && newsMode === 'PAUSE') {
+          await this.logEvent(
+            TradingEventType.MARKET_ANALYSIS,
+            'Scalping paused - High-impact news window',
+            { symbol, timeframe: analysisTimeframe },
+            'info',
+          );
+          return null;
+        }
+
+        // Require HTF alignment to avoid counter-trend scalps (always on during news TREND_ONLY)
         const requireHtfConfirmation =
-          this.configService.get('SCALPING_REQUIRE_HTF_CONFIRMATION', 'true') === 'true';
+          this.configService.get('SCALPING_REQUIRE_HTF_CONFIRMATION', 'true') === 'true' ||
+          (isNewsActive && newsMode === 'TREND_ONLY');
+        let htfConfirmation: { confirmed: boolean; htfTrend: string; confluenceBonus: number } | null = null;
         if (requireHtfConfirmation) {
           const h1Candles = await this.mt5Service.getPriceHistory(symbol, 'H1', 100);
           const h1Formatted: Candle[] = h1Candles.map(c => ({
@@ -287,7 +292,7 @@ export class TradingService implements OnModuleInit {
             return null;
           }
 
-          const htfConfirmation = this.ictStrategyService.getHTFConfirmation(
+          htfConfirmation = this.ictStrategyService.getHTFConfirmation(
             h1Formatted,
             scalpSetup.direction,
           );
@@ -301,6 +306,20 @@ export class TradingService implements OnModuleInit {
               { symbol, timeframe: analysisTimeframe, htfTrend: htfConfirmation.htfTrend },
               'info',
             );
+            return null;
+          }
+        }
+
+        if (isNewsActive && newsMode === 'TREND_ONLY') {
+          const minConfidence = this.getNewsMinConfidence();
+          const minRiskReward = this.getNewsMinRiskReward();
+          if (scalpSetup.confidence < minConfidence || scalpSetup.riskRewardRatio < minRiskReward) {
+            this.logger.log(
+              `⛔ News filter: confidence ${scalpSetup.confidence}% / R:R ${scalpSetup.riskRewardRatio} below thresholds`
+            );
+            return null;
+          }
+          if (htfConfirmation && !htfConfirmation.confirmed) {
             return null;
           }
         }
@@ -331,6 +350,7 @@ export class TradingService implements OnModuleInit {
 
               this.logger.log(`📊 Sending full ICT analysis to AI: ${fullIctAnalysis.orderBlocks.length} OBs, ${fullIctAnalysis.fairValueGaps.length} FVGs, ${fullIctAnalysis.liquidityLevels.length} liquidity levels`);
 
+              const sentiment = await this.marketSentimentService.getSentiment(symbol);
               const aiRecommendation = await this.openAiService.analyzeMarket(
                 fullIctAnalysis,
                 formattedCandles.slice(-20),
@@ -340,6 +360,7 @@ export class TradingService implements OnModuleInit {
                   minRiskReward,
                   minConfidence: 50,
                 },
+                sentiment,
               );
 
               // Check if AI agrees with the trade direction
@@ -429,11 +450,12 @@ export class TradingService implements OnModuleInit {
       }
 
       // ======= STANDARD ICT MODE =======
-      // Check for high-impact news times
-      if (this.ictStrategyService.isHighImpactNewsTime()) {
+      const newsMode = this.getNewsTradeMode();
+      const isNewsActive = this.shouldApplyNewsFilters(symbol) && this.ictStrategyService.isHighImpactNewsTime();
+      if (isNewsActive && newsMode === 'PAUSE') {
         await this.logEvent(
           TradingEventType.MARKET_ANALYSIS,
-          'Skipping analysis - High-impact news time',
+          'Skipping analysis - High-impact news window',
           { symbol, timeframe },
           'info',
         );
@@ -450,6 +472,7 @@ export class TradingService implements OnModuleInit {
       // currentPrice already defined above
 
       // If we have a trade setup, get HTF confirmation
+      let htfConfirmation: { confirmed: boolean; htfTrend: string; confluenceBonus: number } | null = null;
       if (ictAnalysis.tradeSetup) {
         // Get H1 candles for HTF confirmation
         const h1Candles = await this.mt5Service.getPriceHistory(symbol, 'H1', 100);
@@ -462,7 +485,7 @@ export class TradingService implements OnModuleInit {
           volume: c.tickVolume,
         }));
 
-        const htfConfirmation = this.ictStrategyService.getHTFConfirmation(
+        htfConfirmation = this.ictStrategyService.getHTFConfirmation(
           h1Formatted,
           ictAnalysis.tradeSetup.direction,
         );
@@ -481,7 +504,25 @@ export class TradingService implements OnModuleInit {
         }
       }
 
+      if (isNewsActive && newsMode === 'TREND_ONLY') {
+        if (!ictAnalysis.tradeSetup) {
+          return null;
+        }
+        const minConfidence = this.getNewsMinConfidence();
+        const minRiskReward = this.getNewsMinRiskReward();
+        if (
+          ictAnalysis.tradeSetup.confidence < minConfidence ||
+          ictAnalysis.tradeSetup.riskRewardRatio < minRiskReward
+        ) {
+          return null;
+        }
+        if (htfConfirmation && !htfConfirmation.confirmed) {
+          return null;
+        }
+      }
+
       // Get AI recommendation
+      const sentiment = await this.marketSentimentService.getSentiment(symbol);
       const aiRecommendation = await this.openAiService.analyzeMarket(
         ictAnalysis,
         formattedCandles.slice(-20),
@@ -491,6 +532,7 @@ export class TradingService implements OnModuleInit {
           minRiskReward: 1.5,
           minConfidence: 50,
         },
+        sentiment,
       );
 
       // Generate summary for logging
@@ -554,10 +596,6 @@ export class TradingService implements OnModuleInit {
       this.logger.log(`[EA] Analyzing ${candles.length} candles for ${symbol} ${timeframe} (account ${accountId})`);
 
       if (this.scalpingMode) {
-        if (this.ictStrategyService.isHighImpactNewsTime()) {
-          this.logger.log('[EA] Scalping paused — high-impact news time');
-          return null;
-        }
 
         const scalpSetup = this.scalpingStrategy.analyzeForScalp(candles, currentPrice, spread);
         if (!scalpSetup) {
@@ -571,21 +609,44 @@ export class TradingService implements OnModuleInit {
           `TP: ${scalpSetup.takeProfit.toFixed(2)} | R:R ${scalpSetup.riskRewardRatio}`
         );
 
+        const newsMode = this.getNewsTradeMode();
+        const isNewsActive = this.shouldApplyNewsFilters(symbol) && this.ictStrategyService.isHighImpactNewsTime();
+        if (isNewsActive && newsMode === 'PAUSE') {
+          this.logger.log('[EA] Scalping paused - high-impact news window');
+          return null;
+        }
+
         // Require HTF alignment to avoid counter-trend scalps (EA path)
         const requireHtfConfirmation =
-          this.configService.get('SCALPING_REQUIRE_HTF_CONFIRMATION', 'true') === 'true';
+          this.configService.get('SCALPING_REQUIRE_HTF_CONFIRMATION', 'true') === 'true' ||
+          (isNewsActive && newsMode === 'TREND_ONLY');
+        let htfConfirmation: { confirmed: boolean; htfTrend: string; confluenceBonus: number } | null = null;
         if (requireHtfConfirmation) {
           const h1Candles = this.buildH1CandlesFromM5(candles);
           if (h1Candles.length < 20) {
             this.logger.log(`[EA] Insufficient H1 candles for HTF confirmation (${h1Candles.length}) - skipping`);
             return null;
           }
-          const htfConfirmation = this.ictStrategyService.getHTFConfirmation(
+          htfConfirmation = this.ictStrategyService.getHTFConfirmation(
             h1Candles,
             scalpSetup.direction,
           );
           if (!htfConfirmation.confirmed) {
             this.logger.log(`[EA] HTF mismatch: scalp ${scalpSetup.direction} vs H1 ${htfConfirmation.htfTrend} - skipping`);
+            return null;
+          }
+        }
+
+        if (isNewsActive && newsMode === 'TREND_ONLY') {
+          const minConfidence = this.getNewsMinConfidence();
+          const minRiskReward = this.getNewsMinRiskReward();
+          if (scalpSetup.confidence < minConfidence || scalpSetup.riskRewardRatio < minRiskReward) {
+            this.logger.log(
+              `[EA] News filter: confidence ${scalpSetup.confidence}% / R:R ${scalpSetup.riskRewardRatio} below thresholds`
+            );
+            return null;
+          }
+          if (htfConfirmation && !htfConfirmation.confirmed) {
             return null;
           }
         }
@@ -605,6 +666,7 @@ export class TradingService implements OnModuleInit {
                 ? config.rangeMinRiskReward
                 : config.minRiskReward;
 
+              const sentiment = await this.marketSentimentService.getSentiment(symbol);
               const aiRecommendation = await this.openAiService.analyzeMarket(
                 fullIctAnalysis,
                 candles.slice(-20),
@@ -614,6 +676,7 @@ export class TradingService implements OnModuleInit {
                   minRiskReward,
                   minConfidence: 50,
                 },
+                sentiment,
               );
 
               const aiAgrees =
@@ -646,7 +709,41 @@ export class TradingService implements OnModuleInit {
       }
 
       // Standard ICT mode
+      const newsMode = this.getNewsTradeMode();
+      const isNewsActive = this.shouldApplyNewsFilters(symbol) && this.ictStrategyService.isHighImpactNewsTime();
+      if (isNewsActive && newsMode === 'PAUSE') {
+        this.logger.log('[EA] Standard mode paused - high-impact news window');
+        return null;
+      }
+
       const ictAnalysis = this.ictStrategyService.analyzeMarket(candles, symbol, timeframe);
+      if (isNewsActive && newsMode === 'TREND_ONLY') {
+        if (!ictAnalysis.tradeSetup) {
+          return null;
+        }
+        const minConfidence = this.getNewsMinConfidence();
+        const minRiskReward = this.getNewsMinRiskReward();
+        if (
+          ictAnalysis.tradeSetup.confidence < minConfidence ||
+          ictAnalysis.tradeSetup.riskRewardRatio < minRiskReward
+        ) {
+          return null;
+        }
+
+        const h1Candles = this.buildH1CandlesFromM5(candles);
+        if (h1Candles.length < 20) {
+          this.logger.log('[EA] Insufficient H1 candles for HTF confirmation - skipping');
+          return null;
+        }
+        const htfConfirmation = this.ictStrategyService.getHTFConfirmation(
+          h1Candles,
+          ictAnalysis.tradeSetup.direction,
+        );
+        if (!htfConfirmation.confirmed) {
+          return null;
+        }
+      }
+      const sentiment = await this.marketSentimentService.getSentiment(symbol);
       const aiRecommendation = await this.openAiService.analyzeMarket(
         ictAnalysis,
         candles.slice(-20),
@@ -656,6 +753,7 @@ export class TradingService implements OnModuleInit {
           minRiskReward: 1.5,
           minConfidence: 50,
         },
+        sentiment,
       );
 
       const signal = await this.createSignalForAccount(ictAnalysis, aiRecommendation, currentPrice, accountId);
@@ -753,6 +851,35 @@ export class TradingService implements OnModuleInit {
         close: c.close,
         volume: c.volume,
       }));
+  }
+
+  private getNewsTradeMode(): 'PAUSE' | 'TREND_ONLY' | 'ALLOW' {
+    const raw = (this.configService.get('NEWS_TRADE_MODE', 'TREND_ONLY') || '').toUpperCase();
+    if (raw === 'ALLOW') return 'ALLOW';
+    if (raw === 'PAUSE') return 'PAUSE';
+    return 'TREND_ONLY';
+  }
+
+  private getNewsMinConfidence(): number {
+    const raw = Number(this.configService.get('NEWS_MIN_CONFIDENCE', '70'));
+    return Number.isFinite(raw) ? raw : 70;
+  }
+
+  private getNewsMinRiskReward(): number {
+    const raw = Number(this.configService.get('NEWS_MIN_RR', '2'));
+    return Number.isFinite(raw) ? raw : 2;
+  }
+
+  private shouldApplyNewsFilters(symbol: string): boolean {
+    const raw = this.configService.get('NEWS_SYMBOLS', '').trim();
+    if (!raw) return true;
+    const set = new Set(
+      raw
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    );
+    return set.has(symbol);
   }
 
   /**

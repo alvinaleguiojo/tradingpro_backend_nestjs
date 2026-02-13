@@ -4,6 +4,7 @@ import { Model } from 'mongoose';
 import { Mt5Service } from '../mt5/mt5.service';
 import { IctStrategyService } from '../ict-strategy/ict-strategy.service';
 import { OpenAiService } from '../openai/openai.service';
+import { MarketSentimentService } from '../ict-strategy/services/market-sentiment.service';
 import { MarketData, MarketDataDocument } from '../../schemas/market-data.schema';
 import { Candle, IctAnalysisResult } from '../ict-strategy/types';
 
@@ -17,6 +18,7 @@ export class AnalysisService {
     private mt5Service: Mt5Service,
     private ictStrategyService: IctStrategyService,
     private openAiService: OpenAiService,
+    private marketSentimentService: MarketSentimentService,
   ) {}
 
   /**
@@ -61,10 +63,13 @@ export class AnalysisService {
     );
 
     // Get AI recommendation
+    const sentiment = await this.marketSentimentService.getSentiment(symbol);
     const aiRecommendation = await this.openAiService.analyzeMarket(
       ictAnalysis,
       formattedCandles.slice(-20),
       currentPrice,
+      {},
+      sentiment,
     );
 
     // Generate summary

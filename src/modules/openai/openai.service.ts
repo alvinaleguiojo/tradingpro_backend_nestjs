@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import { IctAnalysisResult, TradeSetup } from '../ict-strategy/types';
+import { MarketSentiment } from '../ict-strategy/services/market-sentiment.service';
 
 export interface AiTradeRecommendation {
   shouldTrade: boolean;
@@ -50,6 +51,7 @@ export class OpenAiService {
     recentCandles: { open: number; high: number; low: number; close: number; time: string | Date }[],
     currentPrice: number,
     options: AiAnalysisOptions = {},
+    sentiment?: MarketSentiment | null,
   ): Promise<AiTradeRecommendation> {
     if (!this.openai) {
       return this.getDefaultRecommendation('OpenAI not configured');
@@ -63,7 +65,7 @@ export class OpenAiService {
         mode,
         minRiskReward,
         minConfidence,
-      });
+      }, sentiment);
 
       const configuredModel = this.configService.get<string>('OPENAI_MODEL') || 'gpt-5-chat-latest';
       const modelCandidates = Array.from(new Set([
@@ -161,6 +163,7 @@ CRITICAL RULES:
 9. For a valid reversal, require: Change of Character (CHoCH) or Break of Structure (BoS) in the opposite direction
 10. "Oversold" alone is NOT a buy signal - markets can stay oversold during strong downtrends
 11. Minimum confidence to mark shouldTrade=true is ${options.minConfidence}%
+12. If market sentiment is strongly bullish or bearish, use it as a confirming filter. Do not trade against strong sentiment unless there is clear structural reversal (CHoCH or BOS).
 
 MODE:
 - Current mode is ${options.mode}.
@@ -198,6 +201,7 @@ Respond with a JSON object containing:
     recentCandles: { open: number; high: number; low: number; close: number; time: string | Date }[],
     currentPrice: number,
     options: Required<AiAnalysisOptions>,
+    sentiment?: MarketSentiment | null,
   ): string {
     const last10Candles = recentCandles.slice(-10);
     
@@ -237,6 +241,18 @@ LIQUIDITY:
 SESSION INFO:
 - Current Kill Zone: ${ictAnalysis.currentKillZone?.name || 'Outside Kill Zone'}
 - Session Bias: ${ictAnalysis.sessionBias}
+
+MARKET SENTIMENT (CFTC COT):
+${sentiment ? `
+- Source: ${sentiment.source}
+- Market: ${sentiment.market}
+- As Of: ${sentiment.asOf}
+- Managed Money Net: ${sentiment.managedMoneyNet}
+- Net % OI: ${sentiment.managedMoneyNetPctOpenInterest}
+- Weekly Change: ${sentiment.managedMoneyNetChange}
+- Bias: ${sentiment.bias}
+- Summary: ${sentiment.summary}
+` : '- No sentiment data available'}
 
 ICT TRADE SETUP (if any):
 ${ictAnalysis.tradeSetup ? `

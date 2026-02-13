@@ -4,6 +4,7 @@ import { OrderBlockService } from './services/order-block.service';
 import { FairValueGapService } from './services/fair-value-gap.service';
 import { LiquidityService } from './services/liquidity.service';
 import { KillZoneService } from './services/kill-zone.service';
+import { NewsCalendarService } from './services/news-calendar.service';
 import { 
   Candle, 
   IctAnalysisResult, 
@@ -22,6 +23,7 @@ export class IctStrategyService {
     private fvgService: FairValueGapService,
     private liquidityService: LiquidityService,
     private killZoneService: KillZoneService,
+    private newsCalendarService: NewsCalendarService,
   ) {}
 
   /**
@@ -416,33 +418,9 @@ export class IctStrategyService {
 
   /**
    * Check if it's a high-impact news time (avoid trading)
-   * XAU/USD major news: FOMC, NFP, CPI
-   * DISABLED FOR TESTING
    */
   isHighImpactNewsTime(): boolean {
-    // DISABLED - always allow trading
-    return false;
-    
-    /* Original logic - uncomment to re-enable
-    const now = new Date();
-    const dayOfWeek = now.getUTCDay();
-    const hour = now.getUTCHours();
-    const date = now.getUTCDate();
-
-    // Skip NFP day (first Friday of month)
-    if (dayOfWeek === 5 && date <= 7) {
-      if (hour >= 12 && hour <= 15) { // 12:30-15:30 UTC
-        return true;
-      }
-    }
-
-    // Skip FOMC days (Wednesday 18:00-20:00 UTC) - simplified check
-    if (dayOfWeek === 3 && hour >= 17 && hour <= 20) {
-      return true;
-    }
-
-    return false;
-    */
+    return this.newsCalendarService.isHighImpactWindow();
   }
 
   /**

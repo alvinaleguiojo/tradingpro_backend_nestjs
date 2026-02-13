@@ -8,6 +8,8 @@ import { FairValueGapService } from './services/fair-value-gap.service';
 import { LiquidityService } from './services/liquidity.service';
 import { KillZoneService } from './services/kill-zone.service';
 import { ScalpingStrategyService } from './services/scalping-strategy.service';
+import { NewsCalendarService } from './services/news-calendar.service';
+import { MarketSentimentService } from './services/market-sentiment.service';
 import { TradingSignal, TradingSignalSchema } from '../../schemas/trading-signal.schema';
 import { MarketData, MarketDataSchema } from '../../schemas/market-data.schema';
 
@@ -27,7 +29,9 @@ import { MarketData, MarketDataSchema } from '../../schemas/market-data.schema';
     LiquidityService,
     KillZoneService,
     ScalpingStrategyService,
+    NewsCalendarService,
+    MarketSentimentService,
   ],
-  exports: [IctStrategyService, KillZoneService, ScalpingStrategyService],
+  exports: [IctStrategyService, KillZoneService, ScalpingStrategyService, NewsCalendarService, MarketSentimentService],
 })
 export class IctStrategyModule {}
