@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "TradingPro"
 #property link      "https://tradingpro-backend-nestjs.vercel.app"
-#property version   "3.00"
+#property version   "3.10"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -34,6 +34,8 @@ struct PendingResult
 
 PendingResult  g_results[];
 int            g_resultCount = 0;
+datetime       g_lastDealSyncTime = 0;
+datetime       g_pendingDealSyncTime = 0;
 
 //--- State
 string         g_apiUrl;
@@ -269,6 +271,75 @@ string BuildResultsJson()
   }
 
 //+------------------------------------------------------------------+
+//| Build JSON array of closed deals from MT5 history                |
+//+------------------------------------------------------------------+
+string BuildClosedDealsJson()
+  {
+   datetime toTime = TimeCurrent();
+   datetime fromTime = (g_lastDealSyncTime > 0) ? (g_lastDealSyncTime - 2) : (toTime - 3 * 24 * 60 * 60);
+   if(fromTime < 0) fromTime = 0;
+
+   g_pendingDealSyncTime = g_lastDealSyncTime;
+
+   if(!HistorySelect(fromTime, toTime))
+      return "[]";
+
+   int total = HistoryDealsTotal();
+   if(total <= 0) return "[]";
+
+   string json = "[";
+   int count = 0;
+   datetime maxDealTime = g_lastDealSyncTime;
+
+   for(int i = 0; i < total; i++)
+     {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+
+      long entry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_OUT_BY) continue;
+
+      datetime dealTime = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
+      if(g_lastDealSyncTime > 0 && dealTime <= g_lastDealSyncTime) continue;
+
+      long dealType = HistoryDealGetInteger(dealTicket, DEAL_TYPE);
+      if(dealType != DEAL_TYPE_BUY && dealType != DEAL_TYPE_SELL) continue;
+
+      string symbol = HistoryDealGetString(dealTicket, DEAL_SYMBOL);
+      string type = (dealType == DEAL_TYPE_BUY) ? "BUY" : "SELL";
+      double volume = HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
+      double closePrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+      double profit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+      double commission = HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+      double swap = HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+      long positionId = HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+      int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+
+      if(count > 0) json += ",";
+      json += "{";
+      json += "\"ticket\":\"" + IntegerToString((long)dealTicket) + "\",";
+      json += "\"positionTicket\":\"" + IntegerToString(positionId) + "\",";
+      json += "\"symbol\":\"" + symbol + "\",";
+      json += "\"type\":\"" + type + "\",";
+      json += "\"volume\":" + DoubleToString(volume, 2) + ",";
+      json += "\"closePrice\":" + DoubleToString(closePrice, digits) + ",";
+      json += "\"profit\":" + DoubleToString(profit, 2) + ",";
+      json += "\"commission\":" + DoubleToString(commission, 2) + ",";
+      json += "\"swap\":" + DoubleToString(swap, 2) + ",";
+      json += "\"closeTime\":\"" + TimeToString(dealTime, TIME_DATE | TIME_SECONDS) + "\"";
+      json += "}";
+      count++;
+
+      if(dealTime > maxDealTime)
+         maxDealTime = dealTime;
+     }
+
+   json += "]";
+   g_pendingDealSyncTime = maxDealTime;
+   return json;
+  }
+
+//+------------------------------------------------------------------+
 //| Build full sync payload                                           |
 //+------------------------------------------------------------------+
 string BuildSyncPayload()
@@ -281,7 +352,8 @@ string BuildSyncPayload()
    json += "\"candles\":" + BuildCandlesJson() + ",";
    json += "\"positions\":" + BuildPositionsJson() + ",";
    json += "\"executionResults\":" + BuildResultsJson() + ",";
-   json += "\"eaVersion\":\"3.0\"";
+   json += "\"closedDeals\":" + BuildClosedDealsJson() + ",";
+   json += "\"eaVersion\":\"3.1\"";
    json += "}";
    return json;
   }
@@ -494,6 +566,9 @@ void SyncWithBackend()
       UpdatePanel();
       return;
      }
+
+   if(g_pendingDealSyncTime > g_lastDealSyncTime)
+      g_lastDealSyncTime = g_pendingDealSyncTime;
 
    // Get analysis info
    string analysisRun = JsonGetString(response, "analysisRun");
@@ -729,9 +804,10 @@ int OnInit()
    g_trade.SetExpertMagicNumber(InpMagicNumber);
    g_trade.SetDeviationInPoints(InpSlippage);
    g_trade.SetTypeFilling(ORDER_FILLING_IOC);
+   g_lastDealSyncTime = TimeCurrent() - (3 * 24 * 60 * 60);
 
    Print("=============================================");
-   Print("  TradingPro EA Bridge v3.0");
+   Print("  TradingPro EA Bridge v3.1");
    Print("  Mode: PUSH DATA + EXECUTE COMMANDS");
    Print("  API: ", g_apiUrl);
    Print("  Account: ", g_accountId);

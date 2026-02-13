@@ -14,7 +14,11 @@ import { Trade, TradeDocument, TradeStatus } from '../../schemas/trade.schema';
 import { TradingLog, TradingLogDocument, TradingEventType } from '../../schemas/trading-log.schema';
 import { TradingService } from '../trading/trading.service';
 import { MoneyManagementService } from '../money-management/money-management.service';
-import { EaSyncRequestDto, EaSyncExecutionResultDto } from './dto/ea-sync.dto';
+import {
+  EaSyncRequestDto,
+  EaSyncExecutionResultDto,
+  EaSyncClosedDealDto,
+} from './dto/ea-sync.dto';
 
 @Injectable()
 export class EaBridgeService {
@@ -56,6 +60,12 @@ export class EaBridgeService {
       const execResults = dto.executionResults || [];
       if (execResults.length > 0) {
         await this.processExecutionResults(dto.accountId, execResults);
+      }
+
+      // 3. Reconcile realized closed deals from MT5 history
+      const closedDeals = dto.closedDeals || [];
+      if (closedDeals.length > 0) {
+        await this.processClosedDeals(dto.accountId, closedDeals);
       }
 
       // 3. Sync positions — detect trades closed by SL/TP
@@ -251,6 +261,91 @@ export class EaBridgeService {
       );
     } catch (err) {
       this.logger.error(`Failed to close trade record for ticket ${ticket}: ${err.message}`);
+    }
+  }
+
+  /**
+   * Reconcile closed deals sent by EA from MT5 history.
+   * This captures realized close data (price/profit/commission/swap),
+   * including trades that were closed between sync intervals.
+   */
+  private async processClosedDeals(accountId: string, deals: EaSyncClosedDealDto[]) {
+    if (!deals || deals.length === 0) return;
+
+    const orderedDeals = [...deals].sort((a, b) => {
+      const ta = new Date(a.closeTime || 0).getTime();
+      const tb = new Date(b.closeTime || 0).getTime();
+      return ta - tb;
+    });
+
+    for (const deal of orderedDeals) {
+      const dealTicket = (deal.ticket || '').toString();
+      const positionTicket = (deal.positionTicket || '').toString();
+
+      if (!dealTicket && !positionTicket) continue;
+
+      const closeTime = new Date(deal.closeTime || Date.now());
+      const closePrice = Number(deal.closePrice || 0);
+      const profit = Number(deal.profit || 0);
+      const commission = Number(deal.commission || 0);
+      const swap = Number(deal.swap || 0);
+
+      const trade = await this.tradeModel
+        .findOne({
+          accountId,
+          $or: [{ mt5Ticket: dealTicket }, { mt5Ticket: positionTicket }],
+        })
+        .exec();
+
+      if (trade) {
+        trade.status = TradeStatus.CLOSED;
+        trade.closedAt = closeTime;
+        if (closePrice > 0) trade.exitPrice = closePrice;
+        trade.profit = profit;
+        trade.commission = commission;
+        trade.swap = swap;
+        trade.metadata = {
+          ...(trade.metadata || {}),
+          closeDealTicket: dealTicket,
+          positionTicket,
+          closeSource: 'EA_HISTORY',
+        };
+        await trade.save();
+        continue;
+      }
+
+      const alreadyExists = await this.tradeModel
+        .findOne({
+          accountId,
+          'metadata.closeDealTicket': dealTicket,
+        })
+        .exec();
+
+      if (alreadyExists) continue;
+
+      await this.tradeModel.create({
+        accountId,
+        mt5Ticket: positionTicket || dealTicket,
+        symbol: deal.symbol,
+        direction: deal.type,
+        entryPrice: closePrice,
+        exitPrice: closePrice,
+        stopLoss: 0,
+        takeProfit: 0,
+        lotSize: Number(deal.volume || 0),
+        status: TradeStatus.CLOSED,
+        profit,
+        commission,
+        swap,
+        openedAt: closeTime,
+        closedAt: closeTime,
+        notes: 'Backfilled from EA closed deal history',
+        metadata: {
+          source: 'EA_HISTORY_BACKFILL',
+          closeDealTicket: dealTicket,
+          positionTicket,
+        },
+      });
     }
   }
 

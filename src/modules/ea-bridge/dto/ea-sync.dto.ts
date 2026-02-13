@@ -114,6 +114,41 @@ export class EaSyncExecutionResultDto {
   error?: string;
 }
 
+export class EaSyncClosedDealDto {
+  @IsString()
+  ticket: string;
+
+  @IsOptional()
+  @IsString()
+  positionTicket?: string;
+
+  @IsString()
+  symbol: string;
+
+  @IsString()
+  type: string;
+
+  @IsNumber()
+  volume: number;
+
+  @IsNumber()
+  closePrice: number;
+
+  @IsNumber()
+  profit: number;
+
+  @IsOptional()
+  @IsNumber()
+  commission?: number;
+
+  @IsOptional()
+  @IsNumber()
+  swap?: number;
+
+  @IsString()
+  closeTime: string;
+}
+
 export class EaSyncRequestDto {
   @IsString()
   accountId: string;
@@ -144,6 +179,12 @@ export class EaSyncRequestDto {
   @ValidateNested({ each: true })
   @Type(() => EaSyncExecutionResultDto)
   executionResults?: EaSyncExecutionResultDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => EaSyncClosedDealDto)
+  closedDeals?: EaSyncClosedDealDto[];
 
   @IsOptional()
   @IsString()

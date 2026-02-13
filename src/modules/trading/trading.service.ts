@@ -268,6 +268,43 @@ export class TradingService implements OnModuleInit {
           `TP: ${scalpSetup.takeProfit.toFixed(2)} | R:R ${scalpSetup.riskRewardRatio}`
         );
 
+        // Require HTF alignment to avoid counter-trend scalps
+        const requireHtfConfirmation =
+          this.configService.get('SCALPING_REQUIRE_HTF_CONFIRMATION', 'true') === 'true';
+        if (requireHtfConfirmation) {
+          const h1Candles = await this.mt5Service.getPriceHistory(symbol, 'H1', 100);
+          const h1Formatted: Candle[] = h1Candles.map(c => ({
+            time: c.time,
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
+            volume: c.tickVolume,
+          }));
+
+          if (h1Formatted.length < 20) {
+            this.logger.log(`⚠️ Insufficient H1 candles for HTF confirmation (${h1Formatted.length}) - skipping scalp`);
+            return null;
+          }
+
+          const htfConfirmation = this.ictStrategyService.getHTFConfirmation(
+            h1Formatted,
+            scalpSetup.direction,
+          );
+          if (!htfConfirmation.confirmed) {
+            this.logger.log(
+              `⛔ HTF mismatch: scalp ${scalpSetup.direction} vs H1 ${htfConfirmation.htfTrend} - skipping`
+            );
+            await this.logEvent(
+              TradingEventType.MARKET_ANALYSIS,
+              `Scalp blocked by HTF mismatch: ${scalpSetup.direction} vs H1 ${htfConfirmation.htfTrend}`,
+              { symbol, timeframe: analysisTimeframe, htfTrend: htfConfirmation.htfTrend },
+              'info',
+            );
+            return null;
+          }
+        }
+
         // AI CONFIRMATION: Only for trades with ICT confidence >= 50%
         // This filters out low-quality setups while keeping speed for obvious trades
         const AI_CONFIRMATION_THRESHOLD = 50;
@@ -534,6 +571,25 @@ export class TradingService implements OnModuleInit {
           `TP: ${scalpSetup.takeProfit.toFixed(2)} | R:R ${scalpSetup.riskRewardRatio}`
         );
 
+        // Require HTF alignment to avoid counter-trend scalps (EA path)
+        const requireHtfConfirmation =
+          this.configService.get('SCALPING_REQUIRE_HTF_CONFIRMATION', 'true') === 'true';
+        if (requireHtfConfirmation) {
+          const h1Candles = this.buildH1CandlesFromM5(candles);
+          if (h1Candles.length < 20) {
+            this.logger.log(`[EA] Insufficient H1 candles for HTF confirmation (${h1Candles.length}) - skipping`);
+            return null;
+          }
+          const htfConfirmation = this.ictStrategyService.getHTFConfirmation(
+            h1Candles,
+            scalpSetup.direction,
+          );
+          if (!htfConfirmation.confirmed) {
+            this.logger.log(`[EA] HTF mismatch: scalp ${scalpSetup.direction} vs H1 ${htfConfirmation.htfTrend} - skipping`);
+            return null;
+          }
+        }
+
         const AI_CONFIRMATION_THRESHOLD = 50;
 
         if (scalpSetup.confidence >= AI_CONFIRMATION_THRESHOLD) {
@@ -644,6 +700,59 @@ export class TradingService implements OnModuleInit {
       'Trend-following scalping conditions';
 
     return { regime: 'TREND', regimeReason: trendReason };
+  }
+
+  /**
+   * Build H1 candles from M5 candles (best-effort aggregation for EA path).
+   */
+  private buildH1CandlesFromM5(candles: Candle[]): Candle[] {
+    const sorted = [...candles].sort(
+      (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime(),
+    );
+    const buckets = new Map<
+      string,
+      { time: Date; open: number; high: number; low: number; close: number; volume: number }
+    >();
+
+    for (const c of sorted) {
+      const t = new Date(c.time);
+      if (Number.isNaN(t.getTime())) continue;
+      const hourStart = new Date(Date.UTC(
+        t.getUTCFullYear(),
+        t.getUTCMonth(),
+        t.getUTCDate(),
+        t.getUTCHours(),
+        0, 0, 0,
+      ));
+      const key = hourStart.toISOString();
+      const existing = buckets.get(key);
+      if (!existing) {
+        buckets.set(key, {
+          time: hourStart,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+          volume: c.volume || 0,
+        });
+      } else {
+        existing.high = Math.max(existing.high, c.high);
+        existing.low = Math.min(existing.low, c.low);
+        existing.close = c.close;
+        existing.volume += c.volume || 0;
+      }
+    }
+
+    return Array.from(buckets.values())
+      .sort((a, b) => a.time.getTime() - b.time.getTime())
+      .map(c => ({
+        time: c.time,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+        volume: c.volume,
+      }));
   }
 
   /**
