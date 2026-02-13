@@ -310,6 +310,15 @@ export class TradingService implements OnModuleInit {
           }
         }
 
+        if (isNewsActive && newsMode === 'AGGRESSIVE') {
+          const breakoutCandles = formattedCandles;
+          const breakout = this.isNewsBreakout(breakoutCandles, scalpSetup.direction);
+          if (!breakout) {
+            this.logger.log('⛔ News aggressive: no breakout detected - skipping');
+            return null;
+          }
+        }
+
         if (isNewsActive && newsMode === 'TREND_ONLY') {
           const minConfidence = this.getNewsMinConfidence();
           const minRiskReward = this.getNewsMinRiskReward();
@@ -326,7 +335,9 @@ export class TradingService implements OnModuleInit {
 
         // AI CONFIRMATION: Only for trades with ICT confidence >= 50%
         // This filters out low-quality setups while keeping speed for obvious trades
-        const AI_CONFIRMATION_THRESHOLD = 50;
+        const AI_CONFIRMATION_THRESHOLD = (isNewsActive && newsMode === 'AGGRESSIVE')
+          ? this.getNewsAggressiveMinConfidence()
+          : 50;
         
         if (scalpSetup.confidence >= AI_CONFIRMATION_THRESHOLD) {
           if (this.openAiService.isAvailable()) {
@@ -351,14 +362,20 @@ export class TradingService implements OnModuleInit {
               this.logger.log(`📊 Sending full ICT analysis to AI: ${fullIctAnalysis.orderBlocks.length} OBs, ${fullIctAnalysis.fairValueGaps.length} FVGs, ${fullIctAnalysis.liquidityLevels.length} liquidity levels`);
 
               const sentiment = await this.marketSentimentService.getSentiment(symbol);
+              const aiMinRiskReward = (isNewsActive && newsMode === 'AGGRESSIVE')
+                ? this.getNewsAggressiveMinRiskReward()
+                : minRiskReward;
+              const aiMinConfidence = (isNewsActive && newsMode === 'AGGRESSIVE')
+                ? this.getNewsAggressiveMinConfidence()
+                : 50;
               const aiRecommendation = await this.openAiService.analyzeMarket(
                 fullIctAnalysis,
                 formattedCandles.slice(-20),
                 currentPrice,
                 {
                   mode: 'SCALPING',
-                  minRiskReward,
-                  minConfidence: 50,
+                  minRiskReward: aiMinRiskReward,
+                  minConfidence: aiMinConfidence,
                 },
                 sentiment,
               );
@@ -504,7 +521,23 @@ export class TradingService implements OnModuleInit {
         }
       }
 
-      if (isNewsActive && newsMode === 'TREND_ONLY') {
+      if (isNewsActive && newsMode === 'AGGRESSIVE') {
+        if (!ictAnalysis.tradeSetup) {
+          return null;
+        }
+        const breakoutCandles = await this.getNewsBreakoutCandles(symbol, timeframe, formattedCandles);
+        if (!this.isNewsBreakout(breakoutCandles, ictAnalysis.tradeSetup.direction)) {
+          return null;
+        }
+        const minConfidence = this.getNewsAggressiveMinConfidence();
+        const minRiskReward = this.getNewsAggressiveMinRiskReward();
+        if (
+          ictAnalysis.tradeSetup.confidence < minConfidence ||
+          ictAnalysis.tradeSetup.riskRewardRatio < minRiskReward
+        ) {
+          return null;
+        }
+      } else if (isNewsActive && newsMode === 'TREND_ONLY') {
         if (!ictAnalysis.tradeSetup) {
           return null;
         }
@@ -523,14 +556,20 @@ export class TradingService implements OnModuleInit {
 
       // Get AI recommendation
       const sentiment = await this.marketSentimentService.getSentiment(symbol);
+      const aiMinConfidence = (isNewsActive && newsMode === 'AGGRESSIVE')
+        ? this.getNewsAggressiveMinConfidence()
+        : 50;
+      const aiMinRiskReward = (isNewsActive && newsMode === 'AGGRESSIVE')
+        ? this.getNewsAggressiveMinRiskReward()
+        : 1.5;
       const aiRecommendation = await this.openAiService.analyzeMarket(
         ictAnalysis,
         formattedCandles.slice(-20),
         currentPrice,
         {
           mode: 'STANDARD',
-          minRiskReward: 1.5,
-          minConfidence: 50,
+          minRiskReward: aiMinRiskReward,
+          minConfidence: aiMinConfidence,
         },
         sentiment,
       );
@@ -637,6 +676,14 @@ export class TradingService implements OnModuleInit {
           }
         }
 
+        if (isNewsActive && newsMode === 'AGGRESSIVE') {
+          const breakout = this.isNewsBreakout(candles, scalpSetup.direction);
+          if (!breakout) {
+            this.logger.log('[EA] News aggressive: no breakout detected - skipping');
+            return null;
+          }
+        }
+
         if (isNewsActive && newsMode === 'TREND_ONLY') {
           const minConfidence = this.getNewsMinConfidence();
           const minRiskReward = this.getNewsMinRiskReward();
@@ -651,7 +698,9 @@ export class TradingService implements OnModuleInit {
           }
         }
 
-        const AI_CONFIRMATION_THRESHOLD = 50;
+        const AI_CONFIRMATION_THRESHOLD = (isNewsActive && newsMode === 'AGGRESSIVE')
+          ? this.getNewsAggressiveMinConfidence()
+          : 50;
 
         if (scalpSetup.confidence >= AI_CONFIRMATION_THRESHOLD) {
           if (this.openAiService.isAvailable()) {
@@ -667,14 +716,20 @@ export class TradingService implements OnModuleInit {
                 : config.minRiskReward;
 
               const sentiment = await this.marketSentimentService.getSentiment(symbol);
+              const aiMinRiskReward = (isNewsActive && newsMode === 'AGGRESSIVE')
+                ? this.getNewsAggressiveMinRiskReward()
+                : minRiskReward;
+              const aiMinConfidence = (isNewsActive && newsMode === 'AGGRESSIVE')
+                ? this.getNewsAggressiveMinConfidence()
+                : 50;
               const aiRecommendation = await this.openAiService.analyzeMarket(
                 fullIctAnalysis,
                 candles.slice(-20),
                 currentPrice,
                 {
                   mode: 'SCALPING',
-                  minRiskReward,
-                  minConfidence: 50,
+                  minRiskReward: aiMinRiskReward,
+                  minConfidence: aiMinConfidence,
                 },
                 sentiment,
               );
@@ -717,7 +772,22 @@ export class TradingService implements OnModuleInit {
       }
 
       const ictAnalysis = this.ictStrategyService.analyzeMarket(candles, symbol, timeframe);
-      if (isNewsActive && newsMode === 'TREND_ONLY') {
+      if (isNewsActive && newsMode === 'AGGRESSIVE') {
+        if (!ictAnalysis.tradeSetup) {
+          return null;
+        }
+        if (!this.isNewsBreakout(candles, ictAnalysis.tradeSetup.direction)) {
+          return null;
+        }
+        const minConfidence = this.getNewsAggressiveMinConfidence();
+        const minRiskReward = this.getNewsAggressiveMinRiskReward();
+        if (
+          ictAnalysis.tradeSetup.confidence < minConfidence ||
+          ictAnalysis.tradeSetup.riskRewardRatio < minRiskReward
+        ) {
+          return null;
+        }
+      } else if (isNewsActive && newsMode === 'TREND_ONLY') {
         if (!ictAnalysis.tradeSetup) {
           return null;
         }
@@ -744,14 +814,20 @@ export class TradingService implements OnModuleInit {
         }
       }
       const sentiment = await this.marketSentimentService.getSentiment(symbol);
+      const aiMinConfidence = (isNewsActive && newsMode === 'AGGRESSIVE')
+        ? this.getNewsAggressiveMinConfidence()
+        : 50;
+      const aiMinRiskReward = (isNewsActive && newsMode === 'AGGRESSIVE')
+        ? this.getNewsAggressiveMinRiskReward()
+        : 1.5;
       const aiRecommendation = await this.openAiService.analyzeMarket(
         ictAnalysis,
         candles.slice(-20),
         currentPrice,
         {
           mode: 'STANDARD',
-          minRiskReward: 1.5,
-          minConfidence: 50,
+          minRiskReward: aiMinRiskReward,
+          minConfidence: aiMinConfidence,
         },
         sentiment,
       );
@@ -853,10 +929,11 @@ export class TradingService implements OnModuleInit {
       }));
   }
 
-  private getNewsTradeMode(): 'PAUSE' | 'TREND_ONLY' | 'ALLOW' {
+  private getNewsTradeMode(): 'PAUSE' | 'TREND_ONLY' | 'ALLOW' | 'AGGRESSIVE' {
     const raw = (this.configService.get('NEWS_TRADE_MODE', 'TREND_ONLY') || '').toUpperCase();
     if (raw === 'ALLOW') return 'ALLOW';
     if (raw === 'PAUSE') return 'PAUSE';
+    if (raw === 'AGGRESSIVE') return 'AGGRESSIVE';
     return 'TREND_ONLY';
   }
 
@@ -870,6 +947,26 @@ export class TradingService implements OnModuleInit {
     return Number.isFinite(raw) ? raw : 2;
   }
 
+  private getNewsAggressiveMinConfidence(): number {
+    const raw = Number(this.configService.get('NEWS_AGG_MIN_CONFIDENCE', '35'));
+    return Number.isFinite(raw) ? raw : 35;
+  }
+
+  private getNewsAggressiveMinRiskReward(): number {
+    const raw = Number(this.configService.get('NEWS_AGG_MIN_RR', '1.1'));
+    return Number.isFinite(raw) ? raw : 1.1;
+  }
+
+  private getNewsAggressiveMultiplier(): number {
+    const raw = Number(this.configService.get('NEWS_AGG_MULTIPLIER', '2'));
+    return Number.isFinite(raw) ? raw : 2;
+  }
+
+  private getNewsBreakoutLookback(): number {
+    const raw = Number(this.configService.get('NEWS_BREAKOUT_LOOKBACK', '20'));
+    return Number.isFinite(raw) ? raw : 20;
+  }
+
   private shouldApplyNewsFilters(symbol: string): boolean {
     const raw = this.configService.get('NEWS_SYMBOLS', '').trim();
     if (!raw) return true;
@@ -880,6 +977,39 @@ export class TradingService implements OnModuleInit {
         .filter(Boolean),
     );
     return set.has(symbol);
+  }
+
+  private isNewsBreakout(candles: Candle[], direction: 'BUY' | 'SELL'): boolean {
+    const lookback = Math.max(5, this.getNewsBreakoutLookback());
+    if (!candles || candles.length < lookback + 1) return false;
+    const last = candles[candles.length - 1];
+    const prior = candles.slice(-lookback - 1, -1);
+    const maxHigh = Math.max(...prior.map(c => c.high));
+    const minLow = Math.min(...prior.map(c => c.low));
+    if (direction === 'BUY') {
+      return last.close > maxHigh;
+    }
+    return last.close < minLow;
+  }
+
+  private async getNewsBreakoutCandles(
+    symbol: string,
+    timeframe: string,
+    formattedCandles: Candle[],
+  ): Promise<Candle[]> {
+    if (timeframe.toUpperCase() === 'M5') {
+      return formattedCandles;
+    }
+    const lookback = this.getNewsBreakoutLookback();
+    const candles = await this.mt5Service.getPriceHistory(symbol, 'M5', lookback + 5);
+    return candles.map(c => ({
+      time: c.time,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+      volume: c.tickVolume,
+    }));
   }
 
   /**
@@ -1237,6 +1367,15 @@ export class TradingService implements OnModuleInit {
       let lotSize = mmStatus.recommendedLotSize;
       let currentLevel = mmStatus.currentLevel;
       const currentBalance = Number(mmStatus.accountState.currentBalance);
+
+      // Aggressive sizing during high-impact news
+      const newsMode = this.getNewsTradeMode();
+      const isNewsActive = this.shouldApplyNewsFilters(signal.symbol) && this.ictStrategyService.isHighImpactNewsTime();
+      if (isNewsActive && newsMode === 'AGGRESSIVE') {
+        const multiplier = this.getNewsAggressiveMultiplier();
+        lotSize = Math.round(lotSize * multiplier * 100) / 100;
+        this.logger.warn(`⚡ News aggressive sizing: lotSize x${multiplier} -> ${lotSize}`);
+      }
       
       // SANITY CHECK: Verify lot size matches balance
       // For balances under $100, lot size should ALWAYS be 0.01
